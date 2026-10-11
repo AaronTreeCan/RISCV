@@ -1,0 +1,21 @@
+# build outputs
+build/
+sw/build/
+sim_build/
+results.xml
+
+# waveforms (regenerate with make waves-<name>)
+*.vcd
+*.fst
+*.ghw
+
+# python
+__pycache__/
+*.pyc
+.venv/
+.pytest_cache/
+
+# editors / OS
+.vscode/
+.idea/
+.DS_Store
