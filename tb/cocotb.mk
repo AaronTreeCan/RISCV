@@ -10,7 +10,8 @@ SIMDIR  ?= $(TOP)
 SIM     ?= icarus
 
 TOPLEVEL_LANG   := verilog
-VERILOG_SOURCES := $(wildcard $(CURDIR)/rtl/*.sv)
+PKG_SOURCES     := $(wildcard $(CURDIR)/rtl/*_pkg.sv)
+VERILOG_SOURCES := $(PKG_SOURCES) $(filter-out $(PKG_SOURCES),$(wildcard $(CURDIR)/rtl/*.sv))
 
 # cocotb 1.x names and cocotb 2.x names, so either version works
 TOPLEVEL            := $(TOP)

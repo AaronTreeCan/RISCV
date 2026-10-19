@@ -45,15 +45,18 @@ prog-%:
 		SIMDIR=prog-$* PLUSARGS=+hex=$(CURDIR)/sw/build/$*.hex
 	@python3 scripts/check_results.py build/sim/prog-$*/results.xml
 
+PKGS := $(wildcard rtl/*_pkg.sv)
+SRCS := $(PKGS) $(filter-out $(PKGS),$(wildcard rtl/*.sv))
+
 lint:
-	@for f in rtl/*.sv; do \
+	@for f in $(filter-out $(PKGS),$(wildcard rtl/*.sv)); do \
 		echo "lint $$f"; \
-		verilator --lint-only -Wall -Irtl $$f || exit 1; \
+		verilator --lint-only -Wall -Irtl $(PKGS) $$f || exit 1; \
 	done
 
 synth:
 	@mkdir -p build
-	@yosys -q -l build/synth.log -p "read_verilog -sv rtl/*.sv; synth -top $(strip $(SYNTH_TOP)); stat" >/dev/null
+	@yosys -q -l build/synth.log -p "read_verilog -sv $(SRCS); synth -top $(strip $(SYNTH_TOP)); stat" >/dev/null
 	@sed -n '/Printing statistics/,$$p' build/synth.log
 	@if grep -qi "latch inferred" build/synth.log; then \
 		echo "ERROR: latch inferred - see build/synth.log"; \
