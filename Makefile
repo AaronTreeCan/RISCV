@@ -10,13 +10,14 @@
 #
 # Add a block: create rtl/<name>.sv and tb/test_<name>.py, then add <name> below.
 
-UNIT_TESTS ?= blinky
+# Empty until tb/tb_alu.sv lands (switching unit tests to SystemVerilog)
+UNIT_TESTS ?=
 
 # Your top-level module once the core exists (core + memory), used by prog-*
 CPU_TOP ?= soc
 
 # Module to synthesize. Change to your core's top module in Week 5.
-SYNTH_TOP ?= blinky
+SYNTH_TOP ?= alu
 
 SIM ?= icarus
 
@@ -54,13 +55,16 @@ lint:
 		verilator --lint-only -Wall -Irtl $(PKGS) $$f || exit 1; \
 	done
 
+# Yosys's built-in parser can't read SV packages/imports, so sv2v converts
+# rtl/*.sv to plain Verilog first.
 synth:
 	@mkdir -p build
-	@yosys -q -l build/synth.log -p "read_verilog -sv $(SRCS); synth -top $(strip $(SYNTH_TOP)); stat" >/dev/null
+	@sv2v $(SRCS) > build/synth.v
+	@yosys -q -l build/synth.log -p "read_verilog build/synth.v; synth -top $(strip $(SYNTH_TOP)); stat" >/dev/null
 	@sed -n '/Printing statistics/,$$p' build/synth.log
-	@if grep -qi "latch inferred" build/synth.log; then \
+	@if grep -i "latch inferred" build/synth.log | grep -vqi "no latch inferred"; then \
 		echo "ERROR: latch inferred - see build/synth.log"; \
-		grep -i "latch inferred" build/synth.log; exit 1; \
+		grep -i "latch inferred" build/synth.log | grep -vi "no latch inferred"; exit 1; \
 	fi
 	@echo "Synthesis OK, no latches (full log: build/synth.log)"
 
