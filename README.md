@@ -1,14 +1,11 @@
 # rv32i-core
 
-<!-- One sentence a recruiter reads in 5 seconds. Update it at each milestone. -->
 A single-cycle RISC-V (RV32I) processor in SystemVerilog, verified with cocotb, that runs compiled C. **Status: in progress (Stage 1).**
 
-<!-- Week 8: put your datapath diagram here -->
+<!-- datapath diagram here -->
 <!-- ![Datapath](docs/diagrams/datapath.svg) -->
 
 ## Results
-
-<!-- Fill in as you go. Numbers beat adjectives. -->
 
 | | |
 | --- | --- |
