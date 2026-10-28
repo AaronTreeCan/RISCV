@@ -1,17 +1,18 @@
 # rv32i-core - top-level build
 #
 #   make test            run every unit test listed in UNIT_TESTS
-#   make test-alu        run one unit test (rtl/alu.sv + tb/test_alu.py)
-#   make waves-alu       same, but also dump a waveform for GTKWave
+#   make test-alu        run one unit test (rtl/alu.sv + tb/tb_alu.sv), Icarus by default
+#   make test-alu SIM=verilator   same test on Verilator 5
+#   make waves-alu       same, but also dump a .vcd waveform for GTKWave
 #   make prog-hello      compile sw/c/hello.c, run it on the CPU (Week 6+)
 #   make lint            Verilator lint on every rtl/*.sv file
 #   make synth           Yosys synthesis of SYNTH_TOP; fails if a latch is inferred
 #   make clean           delete build outputs
 #
-# Add a block: create rtl/<name>.sv and tb/test_<name>.py, then add <name> below.
+# Add a block: create rtl/<name>.sv and tb/tb_<name>.sv, then add <name> below.
+# A testbench passes by printing "TEST PASSED"; on failure it calls $fatal.
 
-# Empty until tb/tb_alu.sv lands (switching unit tests to SystemVerilog)
-UNIT_TESTS ?=
+UNIT_TESTS ?= alu
 
 # Your top-level module once the core exists (core + memory), used by prog-*
 CPU_TOP ?= soc
@@ -28,16 +29,22 @@ export SIM
 test: $(addprefix test-,$(UNIT_TESTS))
 	@echo "All unit tests passed: $(UNIT_TESTS)"
 
+# Unit tests: self-checking SystemVerilog testbenches (tb/tb_<name>.sv)
 test-%:
-	@rm -f build/sim/$*/results.xml
-	@$(MAKE) --no-print-directory -f tb/cocotb.mk TOP=$*
-	@python3 scripts/check_results.py build/sim/$*/results.xml
+	@mkdir -p build/sim/$*
+ifeq ($(SIM),verilator)
+	@verilator --binary --timing -Wno-fatal -Wno-lint -Wno-style --top-module tb_$* \
+		-Mdir build/sim/$*/obj -o tb_$* $(SRCS) tb/tb_$*.sv > build/sim/$*/build.log
+	@build/sim/$*/obj/tb_$* $(PLUSARGS) | tee build/sim/$*/sim.log
+else
+	@iverilog -g2012 -Wno-sensitivity-entire-array -o build/sim/$*/tb_$*.vvp $(SRCS) tb/tb_$*.sv
+	@vvp -n build/sim/$*/tb_$*.vvp $(PLUSARGS) | tee build/sim/$*/sim.log
+endif
+	@grep -q "TEST PASSED" build/sim/$*/sim.log
 
 waves-%:
-	@rm -rf build/sim/$*
-	@$(MAKE) --no-print-directory -f tb/cocotb.mk TOP=$* WAVES=1
-	@python3 scripts/check_results.py build/sim/$*/results.xml
-	@echo "Waveform written to build/sim/$*/ - open the .fst file with: gtkwave build/sim/$*/$*.fst"
+	@$(MAKE) --no-print-directory test-$* SIM=icarus PLUSARGS=+waves
+	@echo "Waveform: gtkwave build/sim/$*/tb_$*.vcd"
 
 prog-%:
 	@$(MAKE) --no-print-directory -C sw build/$*.hex
