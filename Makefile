@@ -12,7 +12,7 @@
 # Add a block: create rtl/<name>.sv and tb/tb_<name>.sv, then add <name> below.
 # A testbench passes by printing "TEST PASSED"; on failure it calls $fatal.
 
-UNIT_TESTS ?= alu
+UNIT_TESTS ?= alu regfile
 
 # Your top-level module once the core exists (core + memory), used by prog-*
 CPU_TOP ?= soc

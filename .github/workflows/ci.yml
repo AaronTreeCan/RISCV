@@ -16,7 +16,7 @@ jobs:
 
       - name: Install simulator and synthesis tools
         # Week 7: add gcc-riscv64-unknown-elf here and a step that runs `make prog-hello`
-        run: sudo apt-get update && sudo apt-get install -y iverilog yosys
+        run: sudo apt-get update && sudo apt-get install -y iverilog verilator yosys
 
       - name: Install sv2v (SV -> Verilog for Yosys)
         run: |
@@ -27,8 +27,11 @@ jobs:
       - name: Install cocotb
         run: pip install -r requirements.txt
 
-      - name: Unit tests
+      - name: Unit tests (Icarus)
         run: make test
+
+      - name: Unit tests (Verilator)
+        run: make test SIM=verilator
 
       - name: Synthesis (fails on inferred latches)
         run: make synth
