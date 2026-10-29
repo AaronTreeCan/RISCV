@@ -1,6 +1,6 @@
 # rv32i-core
 
-A single-cycle RISC-V (RV32I) processor in SystemVerilog, verified with cocotb, that runs compiled C. **Status: in progress (Stage 1).**
+A single-cycle RISC-V (RV32I) processor in SystemVerilog, verified with self-checking SystemVerilog testbenches and the official riscv-tests, that runs compiled C. **Status: in progress (Stage 1).**
 
 <!-- datapath diagram here -->
 <!-- ![Datapath](docs/diagrams/datapath.svg) -->
@@ -26,22 +26,26 @@ A single-cycle RISC-V (RV32I) processor in SystemVerilog, verified with cocotb, 
 
 ```
 rtl/         SystemVerilog design (one module per file)
-tb/          cocotb testbenches (test_<module>.py) and the CPU program harness
-sw/          programs that run on the core: c/, asm/, common/ (crt0, linker script)
-scripts/     helpers (results checker, bin -> hex)
+tb/          self-checking SV testbenches (tb_<module>.sv) and the program harness (tb_soc.sv)
+sw/          programs that run on the core: c/, asm/, common/ (crt0, linker script), isa/ (riscv-tests env)
+third_party/ riscv-tests (git submodule)
+scripts/     helpers (bin -> hex)
 docs/        design notes, bug log, encoding table, diagrams, progress log
 ```
 
 ## Running it
 
-Requires Icarus Verilog, Python 3.10+, and `pip install -r requirements.txt`.
-Yosys for `make synth`, Verilator for `make lint`, and a RISC-V GCC (`riscv64-unknown-elf-gcc`) for programs.
+Requires Icarus Verilog 12 or Verilator 5, a RISC-V GCC (`riscv64-unknown-elf-gcc`) for programs,
+and Yosys + sv2v for `make synth`. Clone with `git clone --recursive` (or run
+`git submodule update --init`) to get riscv-tests.
 
 ```
 make test          # all unit tests
 make test-alu      # one block
 make waves-alu     # same, plus a waveform for GTKWave
 make prog-hello    # compile sw/c/hello.c and run it on the core
+make isa           # official rv32ui riscv-tests
+make test SIM=verilator   # any of the above on Verilator instead of Icarus
 make synth         # Yosys synthesis, fails if a latch is inferred
 ```
 

@@ -4,7 +4,9 @@
 #   make test-alu        run one unit test (rtl/alu.sv + tb/tb_alu.sv), Icarus by default
 #   make test-alu SIM=verilator   same test on Verilator 5
 #   make waves-alu       same, but also dump a .vcd waveform for GTKWave
-#   make prog-hello      compile sw/c/hello.c, run it on the CPU (Week 6+)
+#   make prog-hello      compile sw/c/hello.c, run it on the CPU (tb/tb_soc.sv)
+#   make prog-hello PLUSARGS=+waves   same, plus build/sim/prog-hello/tb_soc.vcd
+#   make isa             run the official rv32ui tests (third_party/riscv-tests)
 #   make lint            Verilator lint on every rtl/*.sv file
 #   make synth           Yosys synthesis of SYNTH_TOP; fails if a latch is inferred
 #   make clean           delete build outputs
@@ -14,47 +16,88 @@
 
 UNIT_TESTS ?= alu regfile decoder branch_cmp
 
-# Your top-level module once the core exists (core + memory), used by prog-*
-CPU_TOP ?= soc
-
-# Module to synthesize. Change to your core's top module in Week 5.
-SYNTH_TOP ?= alu
+# Module to synthesize. core = the CPU without its RAM (a 64 KB array of
+# flip-flops would swamp the numbers; real chips use SRAM macros).
+SYNTH_TOP ?= core
 
 SIM ?= icarus
 
 export SIM
 
-.PHONY: test lint synth clean
+.PHONY: test isa lint synth clean
+.SECONDEXPANSION:     # lets test-% depend on $(call SIM_BIN,<name>)
+.SECONDARY:           # keep compiled simulators between runs
 
 test: $(addprefix test-,$(UNIT_TESTS))
 	@echo "All unit tests passed: $(UNIT_TESTS)"
 
-# Unit tests: self-checking SystemVerilog testbenches (tb/tb_<name>.sv)
-test-%:
-	@mkdir -p build/sim/$*
+PKGS := $(wildcard rtl/*_pkg.sv)
+SRCS := $(PKGS) $(filter-out $(PKGS),$(wildcard rtl/*.sv))
+
+# Simulator binary for tb/tb_<name>.sv. Make rebuilds it only when the RTL or
+# the testbench changes, so running many programs compiles the SoC once.
 ifeq ($(SIM),verilator)
-	@verilator --binary --timing -Wno-fatal -Wno-lint -Wno-style --top-module tb_$* \
-		-Mdir build/sim/$*/obj -o tb_$* $(SRCS) tb/tb_$*.sv > build/sim/$*/build.log
-	@build/sim/$*/obj/tb_$* $(PLUSARGS) | tee build/sim/$*/sim.log
+SIM_BIN = build/sim/$(1)/obj/Vtb
+SIM_RUN = build/sim/$(1)/obj/Vtb
 else
-	@iverilog -g2012 -Wno-sensitivity-entire-array -o build/sim/$*/tb_$*.vvp $(SRCS) tb/tb_$*.sv
-	@vvp -n build/sim/$*/tb_$*.vvp $(PLUSARGS) | tee build/sim/$*/sim.log
+SIM_BIN = build/sim/$(1)/tb.vvp
+SIM_RUN = vvp -n build/sim/$(1)/tb.vvp
 endif
-	@grep -q "TEST PASSED" build/sim/$*/sim.log
+
+# (Icarus prints a harmless "sorry: constant selects" note per struct field; hidden)
+build/sim/%/tb.vvp: $(SRCS) tb/tb_%.sv
+	@mkdir -p $(@D) && rm -f $@
+	@iverilog -g2012 -Wno-sensitivity-entire-array -o $@ $^ 2>&1 | grep -v "sorry: constant selects" || true
+	@test -f $@
+
+build/sim/%/obj/Vtb: $(SRCS) tb/tb_%.sv
+	@mkdir -p $(@D)
+	@verilator --binary --timing -Wno-fatal -Wno-lint -Wno-style --top-module tb_$* \
+		-Mdir $(@D) -o Vtb $^ > build/sim/$*/build.log 2>&1 \
+		|| (cat build/sim/$*/build.log; exit 1)
+
+# run-sim <tb name> <log dir> <plusargs>: pass only if the log says "TEST PASSED"
+# and no assertion fired ($error prints "ERROR:" on Icarus, "%Error" on Verilator)
+define run-sim
+	@mkdir -p $(2)
+	@$(call SIM_RUN,$(1)) $(3) | tee $(2)/sim.log
+	@grep -q "TEST PASSED" $(2)/sim.log
+	@! grep -Eq "^(ERROR|%Error)" $(2)/sim.log || { echo "FAIL: assertion error in $(2)/sim.log"; exit 1; }
+endef
+
+# Unit tests: self-checking SystemVerilog testbenches (tb/tb_<name>.sv)
+test-%: $$(call SIM_BIN,$$*)
+	$(call run-sim,$*,build/sim/$*,$(PLUSARGS))
 
 waves-%:
 	@$(MAKE) --no-print-directory test-$* SIM=icarus PLUSARGS=+waves
 	@echo "Waveform: gtkwave build/sim/$*/tb_$*.vcd"
 
-prog-%:
-	@$(MAKE) --no-print-directory -C sw build/$*.hex
-	@rm -rf build/sim/prog-$*
-	@$(MAKE) --no-print-directory -f tb/cocotb.mk TOP=$(strip $(CPU_TOP)) TESTMOD=test_program \
-		SIMDIR=prog-$* PLUSARGS=+hex=$(CURDIR)/sw/build/$*.hex
-	@python3 scripts/check_results.py build/sim/prog-$*/results.xml
+# Programs: build sw/c/<name>.c or sw/asm/<name>.S, run it on the SoC (tb/tb_soc.sv)
+prog-%: $(call SIM_BIN,soc)
+	@$(MAKE) --no-print-directory -C sw build/$*.hex RISCV_TESTS=$(abspath $(RISCV_TESTS))
+	$(call run-sim,soc,build/sim/prog-$*,+hex=$(CURDIR)/sw/build/$*.hex \
+		+wavefile=$(CURDIR)/build/sim/prog-$*/tb_soc.vcd $(PLUSARGS))
 
-PKGS := $(wildcard rtl/*_pkg.sv)
-SRCS := $(PKGS) $(filter-out $(PKGS),$(wildcard rtl/*.sv))
+# Official RISC-V ISA tests (git submodule), one program per instruction.
+#   fence_i: needs Zifencei (FENCE.I), not implemented
+#   ma_data: needs misaligned loads/stores, which this core reports as errors
+RISCV_TESTS ?= third_party/riscv-tests
+ISA_TESTS ?= $(filter-out fence_i ma_data, \
+	$(basename $(notdir $(wildcard $(RISCV_TESTS)/isa/rv32ui/*.S))))
+
+isa: $(call SIM_BIN,soc)
+	@test -d $(RISCV_TESTS)/isa || { echo "missing $(RISCV_TESTS): run git submodule update --init"; exit 1; }
+	@pass=0; failed=""; \
+	for t in $(ISA_TESTS); do \
+		if $(MAKE) --no-print-directory prog-rv32ui-$$t PLUSARGS=+max_cycles=20000 > build/isa-$$t.log 2>&1; then \
+			pass=$$((pass+1)); echo "PASS  rv32ui-$$t"; \
+		else \
+			failed="$$failed $$t"; echo "FAIL  rv32ui-$$t   (log: build/isa-$$t.log)"; \
+		fi; \
+	done; \
+	echo "rv32ui: $$pass/$(words $(ISA_TESTS)) passed"; \
+	test -z "$$failed"
 
 lint:
 	@for f in $(filter-out $(PKGS),$(wildcard rtl/*.sv)); do \
@@ -66,7 +109,7 @@ lint:
 # rtl/*.sv to plain Verilog first.
 synth:
 	@mkdir -p build
-	@sv2v $(SRCS) > build/synth.v
+	@sv2v -DSYNTHESIS $(SRCS) > build/synth.v
 	@yosys -q -l build/synth.log -p "read_verilog build/synth.v; synth -top $(strip $(SYNTH_TOP)); stat" >/dev/null
 	@sed -n '/Printing statistics/,$$p' build/synth.log
 	@if grep -i "latch inferred" build/synth.log | grep -vqi "no latch inferred"; then \
@@ -76,4 +119,4 @@ synth:
 	@echo "Synthesis OK, no latches (full log: build/synth.log)"
 
 clean:
-	rm -rf build sw/build results.xml
+	rm -rf build sw/build

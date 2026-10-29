@@ -9,14 +9,11 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
-
-      - uses: actions/setup-python@v5
         with:
-          python-version: "3.12"
+          submodules: true          # third_party/riscv-tests
 
-      - name: Install simulator and synthesis tools
-        # Week 7: add gcc-riscv64-unknown-elf here and a step that runs `make prog-hello`
-        run: sudo apt-get update && sudo apt-get install -y iverilog verilator yosys
+      - name: Install simulators, synthesis tools, and the RISC-V compiler
+        run: sudo apt-get update && sudo apt-get install -y iverilog verilator yosys gcc-riscv64-unknown-elf
 
       - name: Install sv2v (SV -> Verilog for Yosys)
         run: |
@@ -24,14 +21,22 @@ jobs:
           unzip -j sv2v.zip sv2v-Linux/sv2v -d "$HOME/.local/bin"
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 
-      - name: Install cocotb
-        run: pip install -r requirements.txt
-
       - name: Unit tests (Icarus)
         run: make test
 
       - name: Unit tests (Verilator)
         run: make test SIM=verilator
+
+      - name: Programs on the core (Icarus + Verilator)
+        run: |
+          make prog-hello
+          make prog-jalr_lsb
+          make prog-hello SIM=verilator
+
+      - name: Official RISC-V tests, rv32ui (Icarus + Verilator)
+        run: |
+          make isa
+          make isa SIM=verilator
 
       - name: Synthesis (fails on inferred latches)
         run: make synth
