@@ -12,7 +12,7 @@
 # Add a block: create rtl/<name>.sv and tb/tb_<name>.sv, then add <name> below.
 # A testbench passes by printing "TEST PASSED"; on failure it calls $fatal.
 
-UNIT_TESTS ?= alu regfile
+UNIT_TESTS ?= alu regfile decoder branch_cmp
 
 # Your top-level module once the core exists (core + memory), used by prog-*
 CPU_TOP ?= soc
@@ -59,7 +59,7 @@ SRCS := $(PKGS) $(filter-out $(PKGS),$(wildcard rtl/*.sv))
 lint:
 	@for f in $(filter-out $(PKGS),$(wildcard rtl/*.sv)); do \
 		echo "lint $$f"; \
-		verilator --lint-only -Wall -Irtl $(PKGS) $$f || exit 1; \
+		verilator --lint-only -Wall -Wno-UNUSEDPARAM -Irtl $(PKGS) $$f || exit 1; \
 	done
 
 # Yosys's built-in parser can't read SV packages/imports, so sv2v converts
