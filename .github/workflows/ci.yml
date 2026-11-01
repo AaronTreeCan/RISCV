@@ -28,14 +28,22 @@ jobs:
       - name: Unit tests (Verilator)
         run: make test SIM=verilator
 
-      - name: Programs on the core (Icarus + Verilator)
+      - name: Programs, 5-stage pipeline and dual-issue (Icarus + Verilator)
         run: |
-          for p in hello bench hazards jalr_lsb; do make prog-$p; make prog-$p SIM=verilator; done
+          # (one make per line: bash -e stops at the first failure)
+          for c in 1 2; do for p in hello bench hazards dual jalr_lsb; do
+            make prog-$p CORE=$c
+            make prog-$p CORE=$c SIM=verilator
+          done; done
 
-      - name: Official RISC-V tests, rv32ui (Icarus + Verilator)
+      - name: Official RISC-V tests, rv32ui, both pipelines (Icarus + Verilator)
         run: |
-          make isa
-          make isa SIM=verilator
+          for c in 1 2; do
+            make isa CORE=$c
+            make isa CORE=$c SIM=verilator
+          done
 
-      - name: Synthesis (fails on inferred latches)
-        run: make synth
+      - name: Synthesis, both pipelines (fails on inferred latches)
+        run: |
+          make synth SYNTH_TOP=core
+          make synth SYNTH_TOP=core_dual

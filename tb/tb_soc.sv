@@ -1,19 +1,21 @@
-// tb_soc.sv - runs a program on the pipelined core and checks every
-// instruction it retires against the single-cycle core (lockstep)
+// tb_soc.sv - runs a program on a core and checks every instruction it
+// retires against the single-cycle core (lockstep)
 //
-//   make prog-hello                     build sw/c/hello.c and run it (Icarus)
+//   make prog-hello                     build sw/c/hello.c, run it on the dual-issue core
+//   make prog-hello CORE=1              same on the 5-stage scalar pipeline
 //   make prog-hello SIM=verilator       same on Verilator
 //
 // Plusargs:
 //   +hex=<file>          program image (set by the Makefile)
 //   +max_cycles=<n>      timeout, default 1,000,000
-//   +waves               dump build/sim/prog-<name>/tb_soc.vcd
+//   +waves               dump build/sim/c<CORE>/prog-<name>/tb_soc.vcd
 //
 // Two SoCs load the same program:
-//   dut  = 5-stage pipeline (the design under test)
+//   dut  = the core under test, chosen by the CORE parameter (see soc.sv)
 //   ref  = single-cycle core, the reference model
-// The reference core's clock only ticks when the pipeline retires an
-// instruction, so both step through the program one instruction at a time.
+// The testbench clocks the reference core itself: one extra clock pulse per
+// instruction the DUT retires (up to 2 per cycle on the dual-issue core), so
+// both step through the program in the same order.
 // Each retired instruction must match exactly: pc, encoding, register write,
 // and store. That catches hazard bugs at the first wrong instruction, not
 // thousands of cycles later when a test result comes out wrong.
@@ -24,19 +26,22 @@
 //   illegal instruction always a failure
 // Characters stored to PUTCHAR are printed as they arrive.
 
-module tb_soc;
+module tb_soc
     import riscv_pkg::*;
+#(
+    parameter int CORE = 2      // set by the Makefile (CORE=...)
+);
 
     logic        clk = 1'b0;
     logic        rst = 1'b1;
 
-    // ---------------- design under test: pipelined ----------------
+    // ---------------- design under test ----------------
     logic        exit_valid, putc_valid, halted, illegal;
     logic [31:0] exit_code;
     logic [7:0]  putc_char;
-    retire_t     dut_ret;
+    retire_t     dut_ret0, dut_ret1;
 
-    soc #(.PIPELINED(1'b1)) dut (
+    soc #(.CORE(CORE)) dut (
         .clk        (clk),
         .rst        (rst),
         .exit_valid (exit_valid),
@@ -45,21 +50,19 @@ module tb_soc;
         .putc_char  (putc_char),
         .halted     (halted),
         .illegal    (illegal),
-        .retire     (dut_ret)
+        .retire0    (dut_ret0),
+        .retire1    (dut_ret1)
     );
 
     // ---------------- reference: single-cycle ----------------
-    // ref_en changes only while clk is low, so the gated clock never glitches.
-    logic        ref_en = 1'b1;     // free-running during reset
-    logic        ref_clk;
-    retire_t     ref_ret;
+    // Clocked only by ref_step(), which the checker calls while clk is low.
+    logic        ref_clk = 1'b0;
+    retire_t     ref_ret, ref_ret_unused;
     logic        ref_exit_valid, ref_putc_valid, ref_halted, ref_illegal;
     logic [31:0] ref_exit_code;
     logic [7:0]  ref_putc_char;
 
-    assign ref_clk = clk & ref_en;
-
-    soc #(.PIPELINED(1'b0)) ref_soc (
+    soc #(.CORE(0)) ref_soc (
         .clk        (ref_clk),
         .rst        (rst),
         .exit_valid (ref_exit_valid),
@@ -68,14 +71,23 @@ module tb_soc;
         .putc_char  (ref_putc_char),
         .halted     (ref_halted),
         .illegal    (ref_illegal),
-        .retire     (ref_ret)
+        .retire0    (ref_ret),
+        .retire1    (ref_ret_unused)
     );
+
+    // One reference instruction: rising edge, then let its outputs settle.
+    task automatic ref_step();
+        ref_clk = 1'b1;
+        #1;
+        ref_clk = 1'b0;
+        #1;
+    endtask
 
     always #5 clk = ~clk;
 
     // Architectural registers, rebuilt from the retire stream
     logic [31:0]     xreg [32];
-    longint unsigned cycles, retired;
+    longint unsigned cycles, retired, pairs;
     longint unsigned max_cycles;
     string           wave_file;
     logic [31:0]     last_pc;
@@ -108,13 +120,32 @@ module tb_soc;
     endfunction
 
     function automatic string stats();
-        return $sformatf("%0d cycles, %0d instructions, CPI %0.3f",
-                         cycles, retired, (retired == 0) ? 0.0 : real'(cycles) / real'(retired));
+        return $sformatf("%0d cycles, %0d instructions (%0d cycles retired 2), IPC %0.3f, CPI %0.3f",
+                         cycles, retired, pairs,
+                         (cycles == 0)  ? 0.0 : real'(retired) / real'(cycles),
+                         (retired == 0) ? 0.0 : real'(cycles) / real'(retired));
     endfunction
+
+    // Compare one DUT retire against the reference's next instruction,
+    // update the register shadow, and step the reference past it.
+    task automatic check_retire(input retire_t r);
+        if (!ref_ret.valid)
+            finish_fail($sformatf("DUT retired %s, reference had already stopped", fmt(r)));
+        if (visible(r) !== visible(ref_ret)) begin
+            $display("[tb_soc] DUT      : %s", fmt(visible(r)));
+            $display("[tb_soc] reference: %s", fmt(visible(ref_ret)));
+            finish_fail($sformatf("lockstep mismatch on instruction #%0d", retired + 1));
+        end
+        if (r.rd_we) xreg[r.rd] = r.rd_wdata;
+        last_pc = r.pc;
+        retired++;
+        ref_step();
+    endtask
 
     task automatic finish_pass(input string how);
         $display("");
-        $display("[tb_soc] %s: %s (every instruction matched the single-cycle core)", how, stats());
+        $display("[tb_soc] core %0d %s: %s (every instruction matched the single-cycle core)",
+                 CORE, how, stats());
         $display("TEST PASSED");
         $finish;
     endtask
@@ -134,35 +165,30 @@ module tb_soc;
             $dumpvars(0, tb_soc);
         end
 
-        // hold reset for two rising edges, release it away from the edge
+        // hold reset for two rising edges (and reset the reference too)
+        ref_step();
+        ref_step();
         repeat (2) @(posedge clk);
         @(negedge clk);
-        rst    = 1'b0;
-        ref_en = 1'b0;
+        rst = 1'b0;
+        #1;                     // let the DUT's outputs see reset go away
 
         cycles  = 0;
         retired = 0;
+        pairs   = 0;
         last_pc = '0;
+        // Each pass looks at the instructions that commit on the next rising
+        // edge, half a cycle before it: the DUT's outputs are stable, and the
+        // reference is stepped in the low half of the clock. (The first pass
+        // is right at reset release, so the single-cycle core as DUT works too.)
         forever begin
-            // Look at both cores half a cycle after the edge (no race with
-            // the clock), decide here whether the reference steps next edge.
-            @(negedge clk);
             cycles++;
 
-            ref_en = 1'b0;
-            if (dut_ret.valid) begin
-                if (!ref_ret.valid)
-                    finish_fail($sformatf("pipeline retired %s, reference had already stopped",
-                                          fmt(dut_ret)));
-                if (visible(dut_ret) !== visible(ref_ret)) begin
-                    $display("[tb_soc] pipeline : %s", fmt(visible(dut_ret)));
-                    $display("[tb_soc] reference: %s", fmt(visible(ref_ret)));
-                    finish_fail($sformatf("lockstep mismatch on instruction #%0d", retired + 1));
-                end
-                if (dut_ret.rd_we) xreg[dut_ret.rd] = dut_ret.rd_wdata;
-                last_pc = dut_ret.pc;
-                retired++;
-                ref_en = 1'b1;
+            if (dut_ret0.valid) check_retire(dut_ret0);
+            if (dut_ret1.valid) begin
+                if (!dut_ret0.valid) finish_fail("retire port 1 valid without port 0");
+                check_retire(dut_ret1);
+                pairs++;
             end
 
             if (exit_valid) begin
@@ -177,6 +203,7 @@ module tb_soc;
             end
             if (cycles >= max_cycles)
                 finish_fail($sformatf("timeout, no exit within %0d cycles", max_cycles));
+            @(negedge clk);
         end
     end
 

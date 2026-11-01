@@ -43,7 +43,8 @@ and Yosys + sv2v for `make synth`. Clone with `git clone --recursive` (or run
 make test          # all unit tests
 make test-alu      # one block
 make waves-alu     # same, plus a waveform for GTKWave
-make prog-hello    # compile sw/c/hello.c and run it on the core
+make prog-hello    # compile sw/c/hello.c, run it on the dual-issue core (checked against the single-cycle core)
+make prog-bench CORE=1    # same on the 5-stage scalar pipeline (CORE=0: single-cycle)
 make isa           # official rv32ui riscv-tests
 make test SIM=verilator   # any of the above on Verilator instead of Icarus
 make synth         # Yosys synthesis, fails if a latch is inferred

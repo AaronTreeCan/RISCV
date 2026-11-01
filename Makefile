@@ -4,8 +4,9 @@
 #   make test-alu        run one unit test (rtl/alu.sv + tb/tb_alu.sv), Icarus by default
 #   make test-alu SIM=verilator   same test on Verilator 5
 #   make waves-alu       same, but also dump a .vcd waveform for GTKWave
-#   make prog-hello      compile sw/c/hello.c, run it on the pipelined core, checked
+#   make prog-hello      compile sw/c/hello.c, run it on the dual-issue core, checked
 #                        instruction by instruction against the single-cycle core
+#   make prog-hello CORE=1   same on the 5-stage scalar pipeline (CORE=0: single-cycle)
 #   make prog-hello PLUSARGS=+waves   same, plus build/sim/prog-hello/tb_soc.vcd
 #   make isa             run the official rv32ui tests (third_party/riscv-tests)
 #   make lint            Verilator lint on every rtl/*.sv file
@@ -17,13 +18,16 @@
 
 UNIT_TESTS ?= alu regfile decoder branch_cmp
 
-# Module to synthesize. core = the CPU without its RAM (a 64 KB array of
-# flip-flops would swamp the numbers; real chips use SRAM macros).
-SYNTH_TOP ?= core
+# Module to synthesize: a CPU without its RAM (a 64 KB array of flip-flops
+# would swamp the numbers; real chips use SRAM macros). core = 5-stage pipeline.
+SYNTH_TOP ?= core_dual
 
 SIM ?= icarus
 
-export SIM
+# Core that prog-* and isa run (see rtl/soc.sv): 0 single-cycle, 1 pipeline, 2 dual-issue
+CORE ?= 2
+
+export SIM CORE
 
 .PHONY: test isa lint synth clean
 .SECONDEXPANSION:     # lets test-% depend on $(call SIM_BIN,<name>)
@@ -51,6 +55,18 @@ build/sim/%/tb.vvp: $(SRCS) tb/tb_%.sv
 	@iverilog -g2012 -Wno-sensitivity-entire-array -o $@ $^ 2>&1 | grep -v "sorry: constant selects" || true
 	@test -f $@
 
+# The program harness is built once per core: build/sim/soc_c<CORE>/
+build/sim/soc_c%/tb.vvp: $(SRCS) tb/tb_soc.sv
+	@mkdir -p $(@D) && rm -f $@
+	@iverilog -g2012 -Wno-sensitivity-entire-array -Ptb_soc.CORE=$* -o $@ $^ 2>&1 | grep -v "sorry: constant selects" || true
+	@test -f $@
+
+build/sim/soc_c%/obj/Vtb: $(SRCS) tb/tb_soc.sv
+	@mkdir -p $(@D)
+	@verilator --binary --timing -Wno-fatal -Wno-lint -Wno-style --top-module tb_soc -GCORE=$* \
+		-Mdir $(@D) -o Vtb $^ > build/sim/soc_c$*/build.log 2>&1 \
+		|| (cat build/sim/soc_c$*/build.log; exit 1)
+
 build/sim/%/obj/Vtb: $(SRCS) tb/tb_%.sv
 	@mkdir -p $(@D)
 	@verilator --binary --timing -Wno-fatal -Wno-lint -Wno-style --top-module tb_$* \
@@ -75,10 +91,11 @@ waves-%:
 	@echo "Waveform: gtkwave build/sim/$*/tb_$*.vcd"
 
 # Programs: build sw/c/<name>.c or sw/asm/<name>.S, run it on the SoC (tb/tb_soc.sv)
-prog-%: $(call SIM_BIN,soc)
+# with core CORE, checked against the single-cycle core
+prog-%: $(call SIM_BIN,soc_c$(CORE))
 	@$(MAKE) --no-print-directory -C sw build/$*.hex RISCV_TESTS=$(abspath $(RISCV_TESTS))
-	$(call run-sim,soc,build/sim/prog-$*,+hex=$(CURDIR)/sw/build/$*.hex \
-		+wavefile=$(CURDIR)/build/sim/prog-$*/tb_soc.vcd $(PLUSARGS))
+	$(call run-sim,soc_c$(CORE),build/sim/c$(CORE)/prog-$*,+hex=$(CURDIR)/sw/build/$*.hex \
+		+wavefile=$(CURDIR)/build/sim/c$(CORE)/prog-$*/tb_soc.vcd $(PLUSARGS))
 
 # Official RISC-V ISA tests (git submodule), one program per instruction.
 #   fence_i: needs Zifencei (FENCE.I), not implemented
@@ -87,17 +104,17 @@ RISCV_TESTS ?= third_party/riscv-tests
 ISA_TESTS ?= $(filter-out fence_i ma_data, \
 	$(basename $(notdir $(wildcard $(RISCV_TESTS)/isa/rv32ui/*.S))))
 
-isa: $(call SIM_BIN,soc)
+isa: $(call SIM_BIN,soc_c$(CORE))
 	@test -d $(RISCV_TESTS)/isa || { echo "missing $(RISCV_TESTS): run git submodule update --init"; exit 1; }
 	@pass=0; failed=""; \
 	for t in $(ISA_TESTS); do \
-		if $(MAKE) --no-print-directory prog-rv32ui-$$t PLUSARGS=+max_cycles=20000 > build/isa-$$t.log 2>&1; then \
+		if $(MAKE) --no-print-directory prog-rv32ui-$$t PLUSARGS=+max_cycles=20000 > build/isa-c$(CORE)-$$t.log 2>&1; then \
 			pass=$$((pass+1)); echo "PASS  rv32ui-$$t"; \
 		else \
-			failed="$$failed $$t"; echo "FAIL  rv32ui-$$t   (log: build/isa-$$t.log)"; \
+			failed="$$failed $$t"; echo "FAIL  rv32ui-$$t   (log: build/isa-c$(CORE)-$$t.log)"; \
 		fi; \
 	done; \
-	echo "rv32ui: $$pass/$(words $(ISA_TESTS)) passed"; \
+	echo "rv32ui on core $(CORE): $$pass/$(words $(ISA_TESTS)) passed"; \
 	test -z "$$failed"
 
 lint:
