@@ -91,4 +91,20 @@ package riscv_pkg;
         logic      halt;            // ECALL / EBREAK
     } ctrl_t;
 
+    // One retired (completed) instruction and its architectural effects.
+    // Both cores produce this, so a testbench can check the pipelined core
+    // against the single-cycle core instruction by instruction.
+    typedef struct packed {
+        logic        valid;
+        logic [31:0] pc;
+        logic [31:0] instr;
+        logic        rd_we;         // wrote a register (never set for x0)
+        logic [4:0]  rd;
+        logic [31:0] rd_wdata;
+        logic        mem_we;        // stored to memory
+        logic [31:0] mem_addr;
+        logic [3:0]  mem_be;
+        logic [31:0] mem_wdata;
+    } retire_t;
+
 endpackage

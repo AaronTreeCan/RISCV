@@ -1,4 +1,4 @@
-// soc.sv - single-cycle core + 64 KB unified RAM + test MMIO
+// soc.sv - CPU core + 64 KB unified RAM + test MMIO
 //
 // Memory map:
 //   0x0000_0000 - 0x0000_FFFF  RAM (code + data + stack), word array
@@ -6,13 +6,19 @@
 //   0x8000_0004                PUTCHAR (write: low byte goes to the console)
 //
 // One RAM, two ports: the instruction port and the data port both read
-// combinationally (it behaves like a register file, not a real SRAM). That is
-// fine for a single-cycle core in simulation; the pipeline will move to
-// synchronous-read memories that map onto FPGA block RAM.
+// combinationally (it behaves like a register file, not a real SRAM). Both
+// cores fetch and load in the same cycle the address is ready; moving to
+// synchronous-read FPGA block RAM is a later step.
 //
 // The program image comes from $readmemh with +hex=<file> (simulation only).
+//
+// PIPELINED picks the core: 1 = 5-stage pipeline (core.sv), 0 = the
+// single-cycle reference core (core_sc.sv). Same buses, so nothing else changes.
 
-module soc #(
+module soc
+    import riscv_pkg::*;
+#(
+    parameter bit PIPELINED = 1'b1,
     parameter int RAM_BYTES = 64 * 1024
 ) (
     input  logic        clk,
@@ -24,7 +30,8 @@ module soc #(
     output logic        putc_valid,     // a store to PUTCHAR happened this cycle
     output logic [7:0]  putc_char,
     output logic        halted,         // core hit ECALL / EBREAK
-    output logic        illegal         // core hit an illegal instruction
+    output logic        illegal,        // core hit an illegal instruction
+    output retire_t     retire          // instruction retiring this cycle
 );
 
     localparam int          WORDS     = RAM_BYTES / 4;
@@ -37,20 +44,39 @@ module soc #(
     logic        dmem_re, dmem_we;
     logic [3:0]  dmem_be;
 
-    core u_core (
-        .clk        (clk),
-        .rst        (rst),
-        .imem_addr  (imem_addr),
-        .imem_rdata (imem_rdata),
-        .dmem_addr  (dmem_addr),
-        .dmem_re    (dmem_re),
-        .dmem_we    (dmem_we),
-        .dmem_be    (dmem_be),
-        .dmem_wdata (dmem_wdata),
-        .dmem_rdata (dmem_rdata),
-        .halted     (halted),
-        .illegal    (illegal)
-    );
+    if (PIPELINED) begin : g_pipe
+        core u_core (
+            .clk        (clk),
+            .rst        (rst),
+            .imem_addr  (imem_addr),
+            .imem_rdata (imem_rdata),
+            .dmem_addr  (dmem_addr),
+            .dmem_re    (dmem_re),
+            .dmem_we    (dmem_we),
+            .dmem_be    (dmem_be),
+            .dmem_wdata (dmem_wdata),
+            .dmem_rdata (dmem_rdata),
+            .halted     (halted),
+            .illegal    (illegal),
+            .retire     (retire)
+        );
+    end else begin : g_sc
+        core_sc u_core (
+            .clk        (clk),
+            .rst        (rst),
+            .imem_addr  (imem_addr),
+            .imem_rdata (imem_rdata),
+            .dmem_addr  (dmem_addr),
+            .dmem_re    (dmem_re),
+            .dmem_we    (dmem_we),
+            .dmem_be    (dmem_be),
+            .dmem_wdata (dmem_wdata),
+            .dmem_rdata (dmem_rdata),
+            .halted     (halted),
+            .illegal    (illegal),
+            .retire     (retire)
+        );
+    end
 
     // ---------------- RAM ----------------
     logic [31:0] mem [WORDS];

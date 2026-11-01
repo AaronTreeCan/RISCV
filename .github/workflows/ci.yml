@@ -29,9 +29,7 @@ jobs:
 
       - name: Programs on the core (Icarus + Verilator)
         run: |
-          make prog-hello
-          make prog-jalr_lsb
-          make prog-hello SIM=verilator
+          for p in hello bench hazards jalr_lsb; do make prog-$p; make prog-$p SIM=verilator; done
 
       - name: Official RISC-V tests, rv32ui (Icarus + Verilator)
         run: |

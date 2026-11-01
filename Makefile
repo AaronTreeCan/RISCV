@@ -4,7 +4,8 @@
 #   make test-alu        run one unit test (rtl/alu.sv + tb/tb_alu.sv), Icarus by default
 #   make test-alu SIM=verilator   same test on Verilator 5
 #   make waves-alu       same, but also dump a .vcd waveform for GTKWave
-#   make prog-hello      compile sw/c/hello.c, run it on the CPU (tb/tb_soc.sv)
+#   make prog-hello      compile sw/c/hello.c, run it on the pipelined core, checked
+#                        instruction by instruction against the single-cycle core
 #   make prog-hello PLUSARGS=+waves   same, plus build/sim/prog-hello/tb_soc.vcd
 #   make isa             run the official rv32ui tests (third_party/riscv-tests)
 #   make lint            Verilator lint on every rtl/*.sv file
@@ -110,8 +111,8 @@ lint:
 synth:
 	@mkdir -p build
 	@sv2v -DSYNTHESIS $(SRCS) > build/synth.v
-	@yosys -q -l build/synth.log -p "read_verilog build/synth.v; synth -top $(strip $(SYNTH_TOP)); stat" >/dev/null
-	@sed -n '/Printing statistics/,$$p' build/synth.log
+	@yosys -q -l build/synth.log -p "read_verilog build/synth.v; synth -top $(strip $(SYNTH_TOP)); tee -q -o build/synth_stat.txt stat" >/dev/null
+	@cat build/synth_stat.txt
 	@if grep -i "latch inferred" build/synth.log | grep -vqi "no latch inferred"; then \
 		echo "ERROR: latch inferred - see build/synth.log"; \
 		grep -i "latch inferred" build/synth.log | grep -vi "no latch inferred"; exit 1; \
