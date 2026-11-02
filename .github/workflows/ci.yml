@@ -31,10 +31,14 @@ jobs:
       - name: Programs, 5-stage pipeline and dual-issue (Icarus + Verilator)
         run: |
           # (one make per line: bash -e stops at the first failure)
-          for c in 1 2; do for p in hello bench hazards dual jalr_lsb; do
+          for c in 1 2; do for p in hello bench hazards dual jalr_lsb bp; do
             make prog-$p CORE=$c
             make prog-$p CORE=$c SIM=verilator
           done; done
+
+      - name: Performance floor (lockstep can't see a predictor that predicts badly)
+        run: |
+          make prog-bench CORE=2 SIM=verilator PLUSARGS=+min_ipc=1.15
 
       - name: Official RISC-V tests, rv32ui, both pipelines (Icarus + Verilator)
         run: |

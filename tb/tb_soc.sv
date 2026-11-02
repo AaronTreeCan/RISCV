@@ -8,6 +8,8 @@
 // Plusargs:
 //   +hex=<file>          program image (set by the Makefile)
 //   +max_cycles=<n>      timeout, default 1,000,000
+//   +min_ipc=<x>         also fail if IPC ends up below x (performance check:
+//                        lockstep only proves the results are right, not fast)
 //   +waves               dump build/sim/c<CORE>/prog-<name>/tb_soc.vcd
 //
 // Two SoCs load the same program:
@@ -89,8 +91,30 @@ module tb_soc
     logic [31:0]     xreg [32];
     longint unsigned cycles, retired, pairs;
     longint unsigned max_cycles;
+    real             min_ipc;
     string           wave_file;
     logic [31:0]     last_pc;
+
+    // Branch statistics, read from inside the core under test:
+    //   branches = branches + jumps that reached EX
+    //   flushes  = how many of them redirected fetch (cost 2 cycles each).
+    // On the scalar pipeline every taken one flushes (predict not-taken); on
+    // the dual-issue core only mispredictions do.
+    longint unsigned branches = 0, flushes = 0;
+    if (CORE == 2) begin : g_br_dual
+        always @(posedge clk) if (!rst) begin
+            if (dut.g_dual.u_core.upd_valid) branches++;
+            if (dut.g_dual.u_core.redirect)  flushes++;
+        end
+    end else if (CORE == 1) begin : g_br_pipe
+        always @(posedge clk) if (!rst) begin
+            if (dut.g_pipe.u_core.id_ex.valid &&
+                (dut.g_pipe.u_core.id_ex.ctrl.branch != BR_NONE ||
+                 dut.g_pipe.u_core.id_ex.ctrl.jal || dut.g_pipe.u_core.id_ex.ctrl.jalr))
+                branches++;
+            if (dut.g_pipe.u_core.redirect) flushes++;
+        end
+    end
 
     // console output
     always @(posedge clk) begin
@@ -146,6 +170,11 @@ module tb_soc
         $display("");
         $display("[tb_soc] core %0d %s: %s (every instruction matched the single-cycle core)",
                  CORE, how, stats());
+        if (CORE != 0)
+            $display("[tb_soc] branches+jumps %0d, fetch redirects %0d (%0.1f%%)", branches, flushes,
+                     (branches == 0) ? 0.0 : 100.0 * real'(flushes) / real'(branches));
+        if (real'(retired) < min_ipc * real'(cycles))
+            finish_fail($sformatf("IPC below the +min_ipc=%0.3f floor", min_ipc));
         $display("TEST PASSED");
         $finish;
     endtask
@@ -159,6 +188,7 @@ module tb_soc
     initial begin
         for (int i = 0; i < 32; i++) xreg[i] = 32'd0;
         if (!$value$plusargs("max_cycles=%d", max_cycles)) max_cycles = 1_000_000;
+        if (!$value$plusargs("min_ipc=%f", min_ipc))       min_ipc    = 0.0;
         if ($test$plusargs("waves")) begin
             if (!$value$plusargs("wavefile=%s", wave_file)) wave_file = "tb_soc.vcd";
             $dumpfile(wave_file);

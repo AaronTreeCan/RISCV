@@ -22,13 +22,20 @@
 //
 // Forwarding: 4 producers (MEM and WB, both lanes) feed 4 operands; the
 // youngest producer wins. WB is also bypassed into ID.
-// Branches: predict not-taken, resolve in EX lane 0. A taken branch flushes
-// IF/ID and ID/EX and also kills its own lane-1 partner (younger).
+// Branches: predicted in IF by bp.sv (BTB + 2-bit counters), resolved in EX
+// lane 0. A predicted-taken branch redirects fetch the next cycle with no
+// bubble; if it sits in the first slot, the second word of the pair is
+// dropped. A misprediction (wrong direction or wrong target) flushes IF/ID
+// and ID/EX, kills the branch's own lane-1 partner, and restarts fetch at
+// the right PC: 2 lost cycles, as before for every taken branch.
+// BP = 0 turns prediction off (always predict not-taken) for comparison.
 // Stops: ECALL/EBREAK/illegal take effect in MEM like the scalar pipeline.
 
 module core_dual
     import riscv_pkg::*;
-(
+#(
+    parameter int BP = 1                // 0 = not-taken, 1 = bimodal, 2 = gshare
+) (
     input  logic        clk,
     input  logic        rst,            // synchronous, active high; PC -> 0
 
@@ -52,10 +59,16 @@ module core_dual
 );
 
     // ================= pipeline register types =================
+    localparam int PI = 6;              // PHT index bits (bp.sv): 64 counters
+
+    // pred_*: what fetch predicted for this instruction
     typedef struct packed {
-        logic        valid;
-        logic [31:0] pc;
-        logic [31:0] instr;
+        logic          valid;
+        logic [31:0]   pc;
+        logic [31:0]   instr;
+        logic          pred_taken;
+        logic [31:0]   pred_target;
+        logic [PI-1:0] pred_idx;        // PHT counter used, updated in EX
     } slot_t;
 
     typedef struct packed {
@@ -66,6 +79,9 @@ module core_dual
         logic [31:0] imm;
         logic [4:0]  rs1, rs2, rd;
         logic [31:0] rs1_val, rs2_val;
+        logic          pred_taken;
+        logic [31:0]   pred_target;
+        logic [PI-1:0] pred_idx;
     } id_ex_t;
 
     typedef struct packed {
@@ -95,7 +111,11 @@ module core_dual
     } mem_wb_t;
 
     slot_t   d0, d1;            // IF/ID: the pair waiting in decode
-    id_ex_t  e0, e1;            // ID/EX
+    id_ex_t  e0;                // ID/EX
+    // lane 1 never holds a branch, so e1.pred_* is carried but never read
+    /* verilator lint_off UNUSEDSIGNAL */
+    id_ex_t  e1;
+    /* verilator lint_on UNUSEDSIGNAL */
     ex_mem_t m0;                // EX/MEM
     mem_wb_t w0;                // MEM/WB
     // Lane 1 reuses the same register types for symmetry; its memory fields
@@ -121,7 +141,7 @@ module core_dual
     endfunction
     /* verilator lint_on UNUSEDSIGNAL */
 
-    logic        redirect;          // taken branch / jump in EX lane 0
+    logic        redirect;          // mispredicted branch / jump in EX lane 0
     logic [31:0] redirect_pc;
     logic        stop_mem;          // ECALL / illegal in MEM lane 0
     logic        stopping;          // sticky after stop_mem
@@ -137,21 +157,54 @@ module core_dual
 
     assign imem_addr = {pc_f[31:3], 3'b000};
 
+    // branch predictor lookup, updated from EX lane 0 (see EX below)
+    logic          bp_hit_taken, bp_slot;
+    logic [31:0]   bp_target;
+    logic [PI-1:0] bp_idx0, bp_idx1;
+    logic          bp_taken;            // predicted taken, after the BP switch
+    logic          upd_valid, upd_cond, actual_taken0;
+    logic [31:0]   target0;
+
+    bp #(.PI(PI), .GSHARE(BP == 2)) u_bp (
+        .clk         (clk),
+        .rst         (rst),
+        .fetch_pc    (pc_f),
+        .pred_taken  (bp_hit_taken),
+        .pred_slot   (bp_slot),
+        .pred_target (bp_target),
+        .idx0        (bp_idx0),
+        .idx1        (bp_idx1),
+        .upd_valid   (upd_valid),
+        .upd_cond    (upd_cond),
+        .upd_taken   (actual_taken0),
+        .upd_pc      (e0.pc),
+        .upd_target  (target0),
+        .upd_idx     (e0.pred_idx)
+    );
+    assign bp_taken = (BP != 0) && bp_hit_taken;
+
     always_comb begin
         // a fetch at the second word of a pair yields one instruction
-        f0.valid = 1'b1;
-        f0.pc    = pc_f;
-        f0.instr = pc_f[2] ? imem_rdata[63:32] : imem_rdata[31:0];
-        f1.valid = !pc_f[2];
-        f1.pc    = pc_f + 32'd4;
-        f1.instr = imem_rdata[63:32];
+        f0.valid       = 1'b1;
+        f0.pc          = pc_f;
+        f0.instr       = pc_f[2] ? imem_rdata[63:32] : imem_rdata[31:0];
+        f0.pred_taken   = bp_taken && (bp_slot == pc_f[2]);
+        f0.pred_target = bp_target;
+        f0.pred_idx    = pc_f[2] ? bp_idx1 : bp_idx0;
+        // a predicted-taken branch in the first slot drops the second word
+        f1.valid       = !pc_f[2] && !(bp_taken && !bp_slot);
+        f1.pc          = pc_f + 32'd4;
+        f1.instr       = imem_rdata[63:32];
+        f1.pred_taken   = bp_taken && bp_slot;
+        f1.pred_target = bp_target;
+        f1.pred_idx    = bp_idx1;
     end
 
     always_ff @(posedge clk) begin
         if (rst)                        pc_f <= 32'd0;
         else if (stop_mem || stopping)  pc_f <= pc_f;
         else if (redirect)              pc_f <= redirect_pc;
-        else if (!hold_d0 && !split)    pc_f <= {pc_f[31:3], 3'b000} + 32'd8;
+        else if (!hold_d0 && !split)    pc_f <= bp_taken ? bp_target : {pc_f[31:3], 3'b000} + 32'd8;
     end
 
     always_ff @(posedge clk) begin
@@ -232,7 +285,10 @@ module core_dual
     assign raw01 = c0.reg_write && (rd_0 != 5'd0) &&
                    ((uses_rs1(c1) && rs1_1 == rd_0) || (uses_rs2(c1) && rs2_1 == rd_0));
 
-    assign pair_ok = d1.valid && alu_only(c1) && !raw01 && !lu1 && !c0.halt && !c0.illegal;
+    // (a predicted-taken word in lane 1 can only be a stale BTB alias of an
+    // ALU instruction; send it to lane 0, where mispredicts are checked)
+    assign pair_ok = d1.valid && alu_only(c1) && !d1.pred_taken  && !raw01 && !lu1 &&
+                     !c0.halt && !c0.illegal;
     assign issue0  = d0.valid && !lu0;
     assign issue1  = issue0 && pair_ok;
     assign hold_d0 = d0.valid && lu0;
@@ -254,6 +310,9 @@ module core_dual
                 e0.rd      <= rd_0;
                 e0.rs1_val <= r1_0;
                 e0.rs2_val <= r2_0;
+                e0.pred_taken  <= d0.pred_taken;
+                e0.pred_target <= d0.pred_target;
+                e0.pred_idx    <= d0.pred_idx;
             end else begin
                 e0 <= '0;
             end
@@ -268,6 +327,9 @@ module core_dual
                 e1.rd      <= rd_1;
                 e1.rs1_val <= r1_1;
                 e1.rs2_val <= r2_1;
+                e1.pred_taken  <= d1.pred_taken;
+                e1.pred_target <= d1.pred_target;
+                e1.pred_idx    <= d1.pred_idx;
             end else begin
                 e1 <= '0;
             end
@@ -321,8 +383,17 @@ module core_dual
     branch_cmp u_br0  (.a(a1_0), .b(a2_0), .branch(e0.ctrl.branch), .taken(taken0));
     assign ex_value0 = (e0.ctrl.wb_sel == WB_PC4) ? (e0.pc + 32'd4) : alu_y0;
 
-    assign redirect    = e0.valid && (e0.ctrl.jal || e0.ctrl.jalr || taken0);
-    assign redirect_pc = e0.ctrl.jalr ? {alu_y0[31:1], 1'b0} : alu_y0;
+    // Compare what really happens with what fetch predicted
+    assign actual_taken0 = e0.ctrl.jal || e0.ctrl.jalr || taken0;
+    assign target0       = e0.ctrl.jalr ? {alu_y0[31:1], 1'b0} : alu_y0;
+    assign redirect      = e0.valid &&
+                           ((actual_taken0 != e0.pred_taken) ||
+                            (actual_taken0 && target0 != e0.pred_target));
+    assign redirect_pc   = actual_taken0 ? target0 : e0.pc + 32'd4;
+
+    // train the predictor on every branch and jump that reaches EX lane 0
+    assign upd_valid = e0.valid && (e0.ctrl.jal || e0.ctrl.jalr || (e0.ctrl.branch != BR_NONE));
+    assign upd_cond  = e0.ctrl.branch != BR_NONE;
 
     // lane 1: ALU only
     logic [31:0] alu_a1, alu_b1, alu_y1;
@@ -350,7 +421,7 @@ module core_dual
             m0.ex_value   <= ex_value0;
             m0.store_data <= a2_0;
 
-            // a taken branch in lane 0 kills its younger partner in lane 1
+            // a mispredicted branch in lane 0 kills its younger partner in lane 1
             m1.valid      <= e1.valid && !redirect;
             m1.pc         <= e1.pc;
             m1.instr      <= e1.instr;
@@ -482,12 +553,15 @@ module core_dual
                  (m0.ctrl.mem_size == MEM_W && byte_off != 2'd0)))
                 $error("core_dual: misaligned %s at pc=%h addr=%h",
                        dmem_we ? "store" : "load", m0.pc, dmem_addr);
-            if (redirect && !stop_mem && redirect_pc[1:0] != 2'd0)
+            if (redirect && !stop_mem && actual_taken0 && redirect_pc[1:0] != 2'd0)
                 $error("core_dual: misaligned jump/branch target %h at pc=%h", redirect_pc, e0.pc);
             // lane 1 never holds anything but plain ALU work, and never
             // retires without an older lane-0 instruction beside it
             if (e1.valid && !alu_only(e1.ctrl))
                 $error("core_dual: non-ALU instruction %h in lane 1", e1.instr);
+            // a correctly predicted taken branch never has a lane-1 partner
+            if (e0.valid && e0.pred_taken  && e1.valid)
+                $error("core_dual: lane-1 partner of a predicted-taken branch at pc=%h", e0.pc);
             if (w1.valid && !w0.valid)
                 $error("core_dual: lane 1 retiring without lane 0 at pc=%h", w1.pc);
         end
