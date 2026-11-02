@@ -31,7 +31,7 @@ jobs:
       - name: Programs, 5-stage pipeline and dual-issue (Icarus + Verilator)
         run: |
           # (one make per line: bash -e stops at the first failure)
-          for c in 1 2; do for p in hello bench hazards dual jalr_lsb bp muldiv; do
+          for c in 1 2; do for p in hello bench hazards dual jalr_lsb bp muldiv mlp; do
             make prog-$p CORE=$c
             make prog-$p CORE=$c SIM=verilator
           done; done
@@ -47,7 +47,8 @@ jobs:
             make isa CORE=$c SIM=verilator
           done
 
-      - name: Synthesis, both pipelines (fails on inferred latches)
+      - name: Synthesis, both pipelines and the systolic array (fails on inferred latches)
         run: |
           make synth SYNTH_TOP=core
           make synth SYNTH_TOP=core_dual
+          make synth SYNTH_TOP=systolic

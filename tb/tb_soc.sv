@@ -27,6 +27,10 @@
 //   ECALL / EBREAK      pass if a7 == 93 and a0 == 0                      (riscv-tests style)
 //   illegal instruction always a failure
 // Characters stored to PUTCHAR are printed as they arrive.
+//
+// Loads from devices (the accelerator, the cycle counter) can't be checked
+// this way: the reference takes the DUT's value (see REF in soc.sv). The
+// accelerator's results are checked by tb_accel and by the program itself.
 
 module tb_soc
     import riscv_pkg::*;
@@ -46,6 +50,7 @@ module tb_soc
     soc #(.CORE(CORE)) dut (
         .clk        (clk),
         .rst        (rst),
+        .ext_rdata  (32'd0),
         .exit_valid (exit_valid),
         .exit_code  (exit_code),
         .putc_valid (putc_valid),
@@ -64,9 +69,13 @@ module tb_soc
     logic [31:0] ref_exit_code;
     logic [7:0]  ref_putc_char;
 
-    soc #(.CORE(0)) ref_soc (
+    // Loads from devices (accelerator, cycle counter) return whatever the DUT
+    // loaded (see REF in soc.sv). Only lane 0 does loads, so retire port 0
+    // carries the value while the reference executes that same load.
+    soc #(.CORE(0), .REF(1'b1)) ref_soc (
         .clk        (ref_clk),
         .rst        (rst),
+        .ext_rdata  (dut_ret0.rd_wdata),
         .exit_valid (ref_exit_valid),
         .exit_code  (ref_exit_code),
         .putc_valid (ref_putc_valid),

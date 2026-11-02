@@ -23,7 +23,7 @@ BUILD := build
 .PRECIOUS: $(BUILD)/%.elf $(BUILD)/%.bin
 
 # C programs: crt0 + your code + libgcc (only for helpers like 64-bit divide)
-$(BUILD)/%.elf: c/%.c common/crt0.S common/link.ld common/mmio.h
+$(BUILD)/%.elf: c/%.c common/crt0.S common/link.ld common/mmio.h common/accel.h
 	@mkdir -p $(BUILD)
 	$(CC) $(CFLAGS) $(LDFLAGS) common/crt0.S $< -lgcc -o $@
 

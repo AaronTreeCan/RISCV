@@ -8,15 +8,16 @@
 #                        instruction by instruction against the single-cycle core
 #   make prog-hello CORE=1   same on the 5-stage scalar pipeline (CORE=0: single-cycle)
 #   make prog-hello PLUSARGS=+waves   same, plus build/sim/prog-hello/tb_soc.vcd
-#   make isa             run the official rv32ui tests (third_party/riscv-tests)
+#   make isa             run the official rv32ui + rv32um tests (third_party/riscv-tests)
 #   make lint            Verilator lint on every rtl/*.sv file
 #   make synth           Yosys synthesis of SYNTH_TOP; fails if a latch is inferred
+#   make synth SYNTH_TOP=systolic   same for the accelerator's systolic array
 #   make clean           delete build outputs
 #
 # Add a block: create rtl/<name>.sv and tb/tb_<name>.sv, then add <name> below.
 # A testbench passes by printing "TEST PASSED"; on failure it calls $fatal.
 
-UNIT_TESTS ?= alu regfile decoder branch_cmp muldiv
+UNIT_TESTS ?= alu regfile decoder branch_cmp muldiv accel
 
 # Module to synthesize: a CPU without its RAM (a 64 KB array of flip-flops
 # would swamp the numbers; real chips use SRAM macros). core = 5-stage pipeline.
