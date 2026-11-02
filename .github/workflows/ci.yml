@@ -38,7 +38,7 @@ jobs:
 
       - name: Performance floor (lockstep can't see a predictor that predicts badly)
         run: |
-          make prog-bench CORE=2 SIM=verilator PLUSARGS=+min_ipc=1.10
+          make prog-bench CORE=2 SIM=verilator PLUSARGS=+min_ipc=1.05
 
       - name: Official RISC-V tests, rv32ui + rv32um, both pipelines (Icarus + Verilator)
         run: |

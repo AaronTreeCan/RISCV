@@ -106,7 +106,7 @@ module tb_soc
 
     // Branch statistics, read from inside the core under test:
     //   branches = branches + jumps that reached EX
-    //   flushes  = how many of them redirected fetch (cost 2 cycles each).
+    //   flushes  = how many of them redirected fetch (cost 3 cycles each, 2 with LATE_REDIRECT = 0).
     // On the scalar pipeline every taken one flushes (predict not-taken); on
     // the dual-issue core only mispredictions do.
     longint unsigned branches = 0, flushes = 0;

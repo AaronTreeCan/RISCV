@@ -13,6 +13,7 @@
 #   make synth           Yosys synthesis of SYNTH_TOP; fails if a latch is inferred
 #   make synth SYNTH_TOP=systolic   same for the accelerator's systolic array
 #   make fmax            place and route CORE on a Lattice ECP5 (nextpnr), report the max clock
+#                        (median of 5 placements; LATE_REDIRECT=0 for the old redirect)
 #   make clean           delete build outputs
 #
 # Add a block: create rtl/<name>.sv and tb/tb_<name>.sv, then add <name> below.
@@ -142,17 +143,28 @@ synth:
 
 # Maximum clock frequency on a real FPGA (Lattice ECP5-85F), for CORE 1 or 2.
 # fpga/fmax_top.sv puts flip-flops on every core input and output, so this
-# measures the core's own paths (memories excluded). The slowest path is
-# printed by nextpnr in build/fmax/pnr.log ("Critical path report").
+# measures the core's own paths (memories excluded).
+# Placement is randomized and the result moves by a few MHz from run to run,
+# so it is placed 5 times (seeds 1-5, in parallel) and the median is reported.
+# The slowest path is in build/fmax/pnr-<seed>.log ("Critical path report").
+# LATE_REDIRECT=0 measures the dual-issue core with the old same-cycle
+# branch redirect.
+LATE_REDIRECT ?= 1
+FMAX_SEEDS    ?= 1 2 3 4 5
 fmax:
 	@mkdir -p build/fmax
 	@sv2v -DSYNTHESIS $(SRCS) fpga/fmax_top.sv > build/fmax/fmax.v
-	@yosys -q -l build/fmax/synth.log -p "read_verilog build/fmax/fmax.v; chparam -set CORE $(CORE) fmax_top; synth_ecp5 -top fmax_top -json build/fmax/fmax.json" >/dev/null
-	@nextpnr-ecp5 --85k --package CABGA381 --json build/fmax/fmax.json --freq 50 \
-		--lpf-allow-unconstrained --timing-allow-fail > build/fmax/pnr.log 2>&1 \
-		|| (tail -20 build/fmax/pnr.log; exit 1)
-	@grep -E "Total LUT4s|MULT18X18D|TRELLIS_FF" build/fmax/pnr.log | head -3
-	@grep "Max frequency" build/fmax/pnr.log | tail -1 | sed 's/.*: \([0-9.]* MHz\).*/core $(CORE): max clock \1 (full report: build\/fmax\/pnr.log)/'
+	@yosys -q -l build/fmax/synth.log -p "read_verilog build/fmax/fmax.v; chparam -set CORE $(CORE) fmax_top; \
+		$(if $(filter 2,$(CORE)),chparam -set LATE_REDIRECT $(LATE_REDIRECT) core_dual;) \
+		synth_ecp5 -top fmax_top -json build/fmax/fmax.json" >/dev/null
+	@for s in $(FMAX_SEEDS); do \
+		nextpnr-ecp5 --85k --package CABGA381 --json build/fmax/fmax.json --freq 50 --seed $$s \
+			--lpf-allow-unconstrained --timing-allow-fail > build/fmax/pnr-$$s.log 2>&1 & \
+	done; wait
+	@grep -E "Total LUT4s|MULT18X18D|TRELLIS_FF" build/fmax/pnr-$(firstword $(FMAX_SEEDS)).log | head -3
+	@for s in $(FMAX_SEEDS); do grep "Max frequency" build/fmax/pnr-$$s.log | tail -1 | grep -o "[0-9.]* MHz" | head -1; done \
+		| sort -n | awk '{v[NR]=$$1} END {printf "core $(CORE): max clock %.1f MHz (median of %d placements, range %.1f-%.1f)\n", \
+		  v[int((NR+1)/2)], NR, v[1], v[NR]}'
 
 clean:
 	rm -rf build sw/build

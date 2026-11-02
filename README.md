@@ -14,19 +14,19 @@ reference model, and run through the official riscv-tests on every push.
 | ISA | RV32IM (base integer + multiply/divide) |
 | Cores | single-cycle (reference model), 5-stage pipeline, dual-issue 5-stage |
 | riscv-tests | 48 / 48 (rv32ui + rv32um) on both pipelines, Icarus and Verilator |
-| Dual-issue IPC | 1.13 on `bench.c` (5-stage pipeline: 0.81), **1.40x faster** |
+| Dual-issue IPC | 1.10 on `bench.c` (5-stage pipeline: 0.81); **1.22x faster** in wall-clock time after clock speed |
 | Branch predictor | fetch redirects cut from 58% to 17% of branches |
-| Accelerator | 2-layer INT8 neural net **16.7x faster** than software on the dual-issue core, bit-exact |
-| FPGA timing (Lattice ECP5-85F) | 5-stage 43.9 MHz, dual-issue 36.4 MHz (core logic, memories excluded) |
-| Synthesis (Yosys, generic cells) | 5-stage 15.5k cells, dual-issue 31.7k, systolic array 10.6k; no latches |
+| Accelerator | 2-layer INT8 neural net **16.5x faster** than software on the dual-issue core, bit-exact |
+| FPGA timing (Lattice ECP5-85F) | 5-stage 44.1 MHz, dual-issue 39.6 MHz (core logic, memories excluded) |
+| Synthesis (Yosys, generic cells) | 5-stage 15.5k cells, dual-issue 31.2k, systolic array 10.6k; no latches |
 | Verification | 6 unit testbenches (~190k checks), lockstep checking on every program, 5 directed assembly suites |
 
 ### Performance on `bench.c` (CRC-32, insertion sort, recursive Fibonacci, 18,024 instructions)
 
-| Core | Cycles | IPC | Branches that redirect fetch |
-| --- | ---: | ---: | ---: |
-| 5-stage pipeline (predict not-taken) | 22,345 | 0.81 | 58.4% |
-| Dual-issue + bimodal predictor | 15,932 | 1.13 | 17.1% |
+| Core | Cycles | IPC | Branches that redirect fetch | Clock | Time |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| 5-stage pipeline (predict not-taken) | 22,345 | 0.81 | 58.4% | 44.1 MHz | 507 µs |
+| Dual-issue + bimodal predictor | 16,409 | 1.10 | 17.1% | 39.6 MHz | 414 µs |
 
 ### Accelerator: `mlp.c`, a 2-layer INT8 network (16 x 64 → 16 → 16)
 
@@ -34,7 +34,7 @@ reference model, and run through the official riscv-tests on every push.
 | --- | ---: | ---: | ---: |
 | Single-cycle | 151,774 cycles | 8,075 | 18.7x |
 | 5-stage | 193,762 | 9,617 | 20.1x |
-| Dual-issue | 131,331 | 7,819 | 16.7x |
+| Dual-issue | 131,889 | 7,982 | 16.5x |
 
 The array itself is busy for only 2,160 of those cycles; the rest is the core
 copying matrices in and out with loads and stores (Amdahl's law). A DMA engine
@@ -42,19 +42,32 @@ is the next step.
 
 ### Timing: where the clock period goes
 
-`make fmax` places and routes a core on a Lattice ECP5 with nextpnr. Both
-cores have flip-flops on every input and output (`fpga/fmax_top.sv`), so the
-number is the core's own slowest path; real block RAM would add its own
-constraints.
+`make fmax` places and routes a core on a Lattice ECP5 with nextpnr, five
+times with different placement seeds, and reports the median (single runs
+vary by a few MHz). Both cores have flip-flops on every input and output
+(`fpga/fmax_top.sv`), so the number is the core's own slowest path; real
+block RAM would add its own constraints.
 
-| Core | Max clock | LUT4s | DSP blocks | Slowest path |
+| Core | Max clock (range) | LUT4s | DSP blocks | Slowest path |
 | --- | ---: | ---: | ---: | --- |
-| 5-stage | 43.9 MHz | 3,716 | 4 | forwarding mux → 33x33 multiplier → result mux |
-| Dual-issue | 36.4 MHz | 12,658 | 4 | forwarding mux → lane-0 ALU → branch redirect → fetch and stall control |
+| 5-stage | 44.1 MHz (43.2-45.7) | 3,725 | 4 | forwarding mux → 33x33 multiplier → result mux |
+| Dual-issue, same-cycle redirect | 34.8 MHz (33.9-36.8) | 12,665 | 4 | forwarding mux → lane-0 ALU → branch compare → fetch PC and flush of every front-end register |
+| Dual-issue, registered redirect (default) | **39.6 MHz** (38.6-40.7) | 12,501 | 4 | forwarding mux → 33x33 multiplier → result mux |
 
-Both paths are the price of doing more in one EX cycle. The fixes are known
-trade-offs: a 2-stage multiplier, and registering the branch redirect (one
-more cycle per mispredict, which the predictor makes rare).
+**Fixing the dual-issue slow path.** A mispredicted branch used to redirect
+fetch and flush the front end in the same cycle it was resolved, so the
+branch compare drove a 32-bit PC mux and the reset of every IF/ID and ID/EX
+register. Now the redirect is registered and applied a cycle later from MEM,
+and whatever entered EX in between is turned into a bubble
+(`LATE_REDIRECT` in [core_dual.sv](rtl/core_dual.sv)). That costs one more
+cycle per mispredict: `bench` takes 3% more cycles (15,932 → 16,409). The
+clock went up 14% (34.8 → 39.6 MHz), so the program finishes 9% sooner
+(458 → 414 µs). The predictor is what makes this trade work: only 17% of
+branches mispredict.
+
+The new slowest path is forwarding → multiplier → result mux, the same one
+that limits the 5-stage core (all 5 placements agree); a 2-stage multiplier
+is the next fix. Run `make fmax CORE=2 LATE_REDIRECT=0` to measure the old version.
 
 ## Design highlights
 
@@ -72,7 +85,7 @@ more cycle per mispredict, which the predictor makes rare).
 - 64-entry BTB (one entry per fetch pair) plus 64 two-bit counters, looked up
   in IF. Bimodal by default; gshare is a parameter.
 - Mispredictions (wrong direction or wrong target) are caught in EX and cost
-  2 cycles.
+  3 cycles (the redirect is registered for clock speed; see Timing above).
 
 **Multiply / divide** ([rtl/mul_unit.sv](rtl/mul_unit.sv), [rtl/div_unit.sv](rtl/div_unit.sv))
 - Single-cycle 33x33 multiplier (one signed multiply covers MUL, MULH,
@@ -108,7 +121,7 @@ more cycle per mispredict, which the predictor makes rare).
   multiply/divide in the pipeline ([muldiv.S](sw/asm/muldiv.S)).
 - **Performance floor.** Lockstep proves results are right, not fast: a
   predictor that always guesses wrong still passes. CI also fails if
-  `bench` drops below IPC 1.10.
+  `bench` drops below IPC 1.05.
 - **Two simulators** (Icarus and Verilator) on every run.
 - **Synthesis** with Yosys on every push; the build fails if a latch is inferred.
 

@@ -76,7 +76,7 @@
   <path d="M740,140 L768,140" class="w"/>
   <!-- mispredict redirect -->
   <path d="M485,235 L485,252 L135,252 L135,237" class="wd"/>
-  <text x="290" y="266" text-anchor="middle" class="s">mispredict: redirect fetch, kill younger (2-cycle penalty)</text>
+  <text x="290" y="266" text-anchor="middle" class="s">mispredict: redirect fetch, kill younger (3-cycle penalty)</text>
 
   <!-- bus -->
   <rect x="20" y="300" width="920" height="30" rx="4" fill="#f4f4f4" stroke="#888"/>

@@ -29,6 +29,11 @@
 // and ID/EX, kills the branch's own lane-1 partner, and restarts fetch at
 // the right PC: 2 lost cycles, as before for every taken branch.
 // BP = 0 turns prediction off (always predict not-taken) for comparison.
+// LATE_REDIRECT = 1 (default) registers the redirect and applies it one cycle
+// later, from MEM: 3 lost cycles per mispredict instead of 2, but the branch
+// compare no longer drives the fetch PC and the flush of every front-end
+// register in the same cycle. That was the slowest path in the core
+// (make fmax): see the README for the clock-speed / IPC trade-off.
 // Multiply/divide: lane 0 only, and always issued alone. MUL* take one cycle
 // in EX. DIV/REM wait in EX for the iterative divider (34 cycles) while
 // IF, ID and EX hold and bubbles go into MEM.
@@ -37,7 +42,8 @@
 module core_dual
     import riscv_pkg::*;
 #(
-    parameter int BP = 1                // 0 = not-taken, 1 = bimodal, 2 = gshare
+    parameter int BP            = 1,    // 0 = not-taken, 1 = bimodal, 2 = gshare
+    parameter bit LATE_REDIRECT = 1'b1  // apply mispredict redirects one cycle later
 ) (
     input  logic        clk,
     input  logic        rst,            // synchronous, active high; PC -> 0
@@ -146,6 +152,11 @@ module core_dual
 
     logic        redirect;          // mispredicted branch / jump in EX lane 0
     logic [31:0] redirect_pc;
+    logic        redirect_q;        // LATE_REDIRECT: last cycle's redirect, the branch is now in MEM
+    logic [31:0] redirect_pc_q;
+    logic        redirect_go;       // restart fetch this cycle
+    logic [31:0] redirect_go_pc;
+    logic        kill_ex;           // what's in EX now is on the wrong path
     logic        stop_mem;          // ECALL / illegal in MEM lane 0
     logic        stopping;          // sticky after stop_mem
     logic        flush_front;       // kill IF/ID and ID/EX
@@ -153,7 +164,10 @@ module core_dual
     logic        split;             // first issues alone, second moves up
     logic        stall_ex;          // divide running in EX lane 0: hold IF, ID, EX
 
-    assign flush_front = stop_mem || stopping || redirect;
+    assign redirect_go    = LATE_REDIRECT ? redirect_q    : redirect;
+    assign redirect_go_pc = LATE_REDIRECT ? redirect_pc_q : redirect_pc;
+    assign kill_ex        = LATE_REDIRECT && redirect_q;
+    assign flush_front    = stop_mem || stopping || redirect_go;
 
     // ================= IF =================
     logic [31:0] pc_f;
@@ -207,7 +221,7 @@ module core_dual
     always_ff @(posedge clk) begin
         if (rst)                        pc_f <= 32'd0;
         else if (stop_mem || stopping)  pc_f <= pc_f;
-        else if (redirect)              pc_f <= redirect_pc;
+        else if (redirect_go)           pc_f <= redirect_go_pc;
         else if (!hold_d0 && !split && !stall_ex) pc_f <= bp_taken ? bp_target : {pc_f[31:3], 3'b000} + 32'd8;
     end
 
@@ -393,7 +407,7 @@ module core_dual
     md_op_t      md_op0;
 
     assign md_op0   = md_op_t'(e0.instr[14:12]);
-    assign is_div0  = e0.valid && e0.ctrl.muldiv && e0.instr[14];
+    assign is_div0  = e0.valid && !kill_ex && e0.ctrl.muldiv && e0.instr[14];
     assign stall_ex = is_div0 && !div_done;
 
     mul_unit u_mul (.a(a1_0), .b(a2_0), .op(md_op0), .result(mul_y0));
@@ -420,13 +434,13 @@ module core_dual
     // Compare what really happens with what fetch predicted
     assign actual_taken0 = e0.ctrl.jal || e0.ctrl.jalr || taken0;
     assign target0       = e0.ctrl.jalr ? {alu_y0[31:1], 1'b0} : alu_y0;
-    assign redirect      = e0.valid &&
+    assign redirect      = e0.valid && !kill_ex &&
                            ((actual_taken0 != e0.pred_taken) ||
                             (actual_taken0 && target0 != e0.pred_target));
     assign redirect_pc   = actual_taken0 ? target0 : e0.pc + 32'd4;
 
     // train the predictor on every branch and jump that reaches EX lane 0
-    assign upd_valid = e0.valid && (e0.ctrl.jal || e0.ctrl.jalr || (e0.ctrl.branch != BR_NONE));
+    assign upd_valid = e0.valid && !kill_ex && (e0.ctrl.jal || e0.ctrl.jalr || (e0.ctrl.branch != BR_NONE));
     assign upd_cond  = e0.ctrl.branch != BR_NONE;
 
     // lane 1: ALU only
@@ -442,8 +456,9 @@ module core_dual
     alu u_alu1 (.a(alu_a1), .b(alu_b1), .op(e1.ctrl.alu_op), .result(alu_y1));
 
     always_ff @(posedge clk) begin
-        if (rst || stop_mem || stopping || stall_ex) begin
-            m0 <= '0;                               // (bubbles while dividing)
+        // bubbles while dividing, and in place of wrong-path instructions
+        if (rst || stop_mem || stopping || stall_ex || kill_ex) begin
+            m0 <= '0;
             m1 <= '0;
         end else begin
             m0.valid      <= e0.valid;
@@ -464,6 +479,18 @@ module core_dual
             m1.alu_result <= alu_y1;
             m1.ex_value   <= alu_y1;
             m1.store_data <= '0;
+        end
+    end
+
+    // LATE_REDIRECT: hold the redirect for a cycle. The instructions that
+    // enter EX meanwhile are on the wrong path; kill_ex turns them into bubbles.
+    always_ff @(posedge clk) begin
+        if (rst || stop_mem || stopping) begin
+            redirect_q    <= 1'b0;
+            redirect_pc_q <= '0;
+        end else begin
+            redirect_q    <= redirect;
+            redirect_pc_q <= redirect_pc;
         end
     end
 
