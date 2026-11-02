@@ -1,0 +1,130 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 575" width="960" height="575" font-family="Helvetica, Arial, sans-serif" font-size="13">
+  <defs>
+    <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#444"/>
+    </marker>
+    <style>
+      .stage { fill: #eef3fb; stroke: #4a6fa5; stroke-width: 1.5; }
+      .unit  { fill: #ffffff; stroke: #4a6fa5; stroke-width: 1.2; }
+      .acc   { fill: #fdf3e7; stroke: #c07a2c; stroke-width: 1.5; }
+      .pe    { fill: #ffffff; stroke: #c07a2c; stroke-width: 1; }
+      .mem   { fill: #eef7ee; stroke: #4c8a4c; stroke-width: 1.5; }
+      .t     { fill: #1d1d1d; }
+      .s     { fill: #555; font-size: 11px; }
+      .h     { fill: #1d1d1d; font-size: 15px; font-weight: bold; }
+      .w     { stroke: #444; stroke-width: 1.4; fill: none; marker-end: url(#a); }
+      .wd    { stroke: #888; stroke-width: 1.2; fill: none; stroke-dasharray: 5 4; marker-end: url(#a); }
+    </style>
+  </defs>
+  <rect width="960" height="575" fill="#ffffff"/>
+
+  <!-- core -->
+  <text x="20" y="28" class="h">Dual-issue RV32IM core (rtl/core_dual.sv)</text>
+
+  <rect x="20" y="45" width="150" height="190" rx="6" class="stage"/>
+  <text x="95" y="66" text-anchor="middle" class="t" font-weight="bold">IF</text>
+  <rect x="32" y="78" width="126" height="40" rx="4" class="unit"/>
+  <text x="95" y="96" text-anchor="middle" class="t">fetch 2 instrs</text>
+  <text x="95" y="111" text-anchor="middle" class="s">aligned 64-bit pair</text>
+  <rect x="32" y="128" width="126" height="94" rx="4" class="unit"/>
+  <text x="95" y="146" text-anchor="middle" class="t">branch predictor</text>
+  <text x="95" y="162" text-anchor="middle" class="s">64-entry BTB</text>
+  <text x="95" y="177" text-anchor="middle" class="s">64 x 2-bit counters</text>
+  <text x="95" y="192" text-anchor="middle" class="s">(bimodal / gshare)</text>
+  <text x="95" y="210" text-anchor="middle" class="s">rtl/bp.sv</text>
+
+  <rect x="200" y="45" width="160" height="190" rx="6" class="stage"/>
+  <text x="280" y="66" text-anchor="middle" class="t" font-weight="bold">ID / issue</text>
+  <rect x="212" y="78" width="136" height="64" rx="4" class="unit"/>
+  <text x="280" y="96" text-anchor="middle" class="t">2 decoders</text>
+  <text x="280" y="112" text-anchor="middle" class="s">pair if independent,</text>
+  <text x="280" y="127" text-anchor="middle" class="s">else split and stall</text>
+  <rect x="212" y="152" width="136" height="70" rx="4" class="unit"/>
+  <text x="280" y="170" text-anchor="middle" class="t">register file</text>
+  <text x="280" y="186" text-anchor="middle" class="s">32 x 32, 4 read /</text>
+  <text x="280" y="201" text-anchor="middle" class="s">2 write ports</text>
+
+  <rect x="390" y="45" width="190" height="190" rx="6" class="stage"/>
+  <text x="485" y="66" text-anchor="middle" class="t" font-weight="bold">EX</text>
+  <rect x="402" y="78" width="166" height="74" rx="4" class="unit"/>
+  <text x="485" y="96" text-anchor="middle" class="t">lane 0: any instruction</text>
+  <text x="485" y="112" text-anchor="middle" class="s">ALU, branch check / redirect</text>
+  <text x="485" y="127" text-anchor="middle" class="s">1-cycle multiplier</text>
+  <text x="485" y="142" text-anchor="middle" class="s">33-cycle divider (stalls)</text>
+  <rect x="402" y="162" width="166" height="60" rx="4" class="unit"/>
+  <text x="485" y="182" text-anchor="middle" class="t">lane 1: ALU only</text>
+  <text x="485" y="198" text-anchor="middle" class="s">forwarding from 4 producers,</text>
+  <text x="485" y="212" text-anchor="middle" class="s">youngest wins</text>
+
+  <rect x="610" y="45" width="130" height="190" rx="6" class="stage"/>
+  <text x="675" y="66" text-anchor="middle" class="t" font-weight="bold">MEM</text>
+  <rect x="622" y="78" width="106" height="64" rx="4" class="unit"/>
+  <text x="675" y="98" text-anchor="middle" class="t">load / store</text>
+  <text x="675" y="114" text-anchor="middle" class="s">lane 0 only</text>
+  <text x="675" y="129" text-anchor="middle" class="s">ECALL stops here</text>
+
+  <rect x="770" y="45" width="100" height="190" rx="6" class="stage"/>
+  <text x="820" y="66" text-anchor="middle" class="t" font-weight="bold">WB</text>
+  <rect x="782" y="78" width="76" height="64" rx="4" class="unit"/>
+  <text x="820" y="100" text-anchor="middle" class="t">write 2</text>
+  <text x="820" y="116" text-anchor="middle" class="s">retire up to</text>
+  <text x="820" y="130" text-anchor="middle" class="s">2 per cycle</text>
+
+  <path d="M170,140 L198,140" class="w"/>
+  <path d="M360,140 L388,140" class="w"/>
+  <path d="M580,140 L608,140" class="w"/>
+  <path d="M740,140 L768,140" class="w"/>
+  <!-- mispredict redirect -->
+  <path d="M485,235 L485,252 L135,252 L135,237" class="wd"/>
+  <text x="290" y="266" text-anchor="middle" class="s">mispredict: redirect fetch, kill younger (2-cycle penalty)</text>
+
+  <!-- bus -->
+  <rect x="20" y="300" width="920" height="30" rx="4" fill="#f4f4f4" stroke="#888"/>
+  <text x="480" y="320" text-anchor="middle" class="t">SoC bus (rtl/soc.sv): instruction port (64-bit) + data port (32-bit), loads and stores only</text>
+  <path d="M95,237 L95,298" class="w"/>
+  <path d="M675,237 L675,298" class="w"/>
+
+  <!-- memory and mmio -->
+  <rect x="20" y="360" width="200" height="90" rx="6" class="mem"/>
+  <text x="120" y="388" text-anchor="middle" class="t" font-weight="bold">64 KB RAM</text>
+  <text x="120" y="408" text-anchor="middle" class="s">0x0000_0000</text>
+  <text x="120" y="426" text-anchor="middle" class="s">code + data + stack</text>
+  <path d="M120,332 L120,358" class="w"/>
+
+  <rect x="240" y="360" width="200" height="90" rx="6" class="mem"/>
+  <text x="340" y="388" text-anchor="middle" class="t" font-weight="bold">MMIO</text>
+  <text x="340" y="408" text-anchor="middle" class="s">0x8000_0000 exit, putchar</text>
+  <text x="340" y="426" text-anchor="middle" class="s">0x8000_0008 cycle counter</text>
+  <path d="M340,332 L340,358" class="w"/>
+
+  <!-- accelerator -->
+  <rect x="470" y="345" width="470" height="215" rx="6" class="acc"/>
+  <text x="485" y="368" class="t" font-weight="bold">INT8 matrix accelerator (rtl/accel.sv), 0x4000_0000</text>
+  <path d="M700,332 L700,343" class="w"/>
+
+  <rect x="485" y="380" width="120" height="150" rx="4" class="pe"/>
+  <text x="545" y="400" text-anchor="middle" class="t">buffers</text>
+  <text x="545" y="420" text-anchor="middle" class="s">A  16 x 64 INT8</text>
+  <text x="545" y="438" text-anchor="middle" class="s">W  64 x 16 INT8</text>
+  <text x="545" y="456" text-anchor="middle" class="s">C  16 x 16 INT32</text>
+  <text x="545" y="482" text-anchor="middle" class="s">CTRL STATUS DIMS</text>
+  <text x="545" y="498" text-anchor="middle" class="s">QUANT CYCLES</text>
+
+  <!-- 4x4 array -->
+  <text x="715" y="392" text-anchor="middle" class="s">4 x 4 systolic array (rtl/systolic.sv)</text>
+  <g>
+    <rect x="655" y="402" width="26" height="22" class="pe"/><rect x="687" y="402" width="26" height="22" class="pe"/><rect x="719" y="402" width="26" height="22" class="pe"/><rect x="751" y="402" width="26" height="22" class="pe"/>
+    <rect x="655" y="430" width="26" height="22" class="pe"/><rect x="687" y="430" width="26" height="22" class="pe"/><rect x="719" y="430" width="26" height="22" class="pe"/><rect x="751" y="430" width="26" height="22" class="pe"/>
+    <rect x="655" y="458" width="26" height="22" class="pe"/><rect x="687" y="458" width="26" height="22" class="pe"/><rect x="719" y="458" width="26" height="22" class="pe"/><rect x="751" y="458" width="26" height="22" class="pe"/>
+    <rect x="655" y="486" width="26" height="22" class="pe"/><rect x="687" y="486" width="26" height="22" class="pe"/><rect x="719" y="486" width="26" height="22" class="pe"/><rect x="751" y="486" width="26" height="22" class="pe"/>
+  </g>
+  <path d="M607,455 L650,455" class="w"/>
+  <text x="628" y="447" text-anchor="middle" class="s">A rows</text>
+  <text x="628" y="470" text-anchor="middle" class="s">(skewed)</text>
+  <path d="M716,510 L716,524" class="w"/>
+  <text x="790" y="415" class="s">weights stay</text>
+  <text x="790" y="430" class="s">in each cell</text>
+  <text x="790" y="458" class="s">activations →</text>
+  <text x="790" y="473" class="s">partial sums ↓</text>
+  <text x="716" y="546" text-anchor="middle" class="s">INT32 rows → accumulate in C → round, shift, ReLU, clamp → INT8</text>
+</svg>

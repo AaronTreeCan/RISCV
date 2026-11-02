@@ -12,6 +12,7 @@
 #   make lint            Verilator lint on every rtl/*.sv file
 #   make synth           Yosys synthesis of SYNTH_TOP; fails if a latch is inferred
 #   make synth SYNTH_TOP=systolic   same for the accelerator's systolic array
+#   make fmax            place and route CORE on a Lattice ECP5 (nextpnr), report the max clock
 #   make clean           delete build outputs
 #
 # Add a block: create rtl/<name>.sv and tb/tb_<name>.sv, then add <name> below.
@@ -30,7 +31,7 @@ CORE ?= 2
 
 export SIM CORE
 
-.PHONY: test isa lint synth clean
+.PHONY: test isa lint synth fmax clean
 .SECONDEXPANSION:     # lets test-% depend on $(call SIM_BIN,<name>)
 .SECONDARY:           # keep compiled simulators between runs
 
@@ -138,6 +139,20 @@ synth:
 		grep -i "latch inferred" build/synth.log | grep -vi "no latch inferred"; exit 1; \
 	fi
 	@echo "Synthesis OK, no latches (full log: build/synth.log)"
+
+# Maximum clock frequency on a real FPGA (Lattice ECP5-85F), for CORE 1 or 2.
+# fpga/fmax_top.sv puts flip-flops on every core input and output, so this
+# measures the core's own paths (memories excluded). The slowest path is
+# printed by nextpnr in build/fmax/pnr.log ("Critical path report").
+fmax:
+	@mkdir -p build/fmax
+	@sv2v -DSYNTHESIS $(SRCS) fpga/fmax_top.sv > build/fmax/fmax.v
+	@yosys -q -l build/fmax/synth.log -p "read_verilog build/fmax/fmax.v; chparam -set CORE $(CORE) fmax_top; synth_ecp5 -top fmax_top -json build/fmax/fmax.json" >/dev/null
+	@nextpnr-ecp5 --85k --package CABGA381 --json build/fmax/fmax.json --freq 50 \
+		--lpf-allow-unconstrained --timing-allow-fail > build/fmax/pnr.log 2>&1 \
+		|| (tail -20 build/fmax/pnr.log; exit 1)
+	@grep -E "Total LUT4s|MULT18X18D|TRELLIS_FF" build/fmax/pnr.log | head -3
+	@grep "Max frequency" build/fmax/pnr.log | tail -1 | sed 's/.*: \([0-9.]* MHz\).*/core $(CORE): max clock \1 (full report: build\/fmax\/pnr.log)/'
 
 clean:
 	rm -rf build sw/build
