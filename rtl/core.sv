@@ -1,8 +1,9 @@
-// core.sv - 5-stage pipelined RV32I core
+// core.sv - 5-stage pipelined RV32IM core
 //
 //   IF   fetch at pc_f
 //   ID   decode, immediate, register read (+ bypass from WB)
-//   EX   ALU, branch compare, jump/branch target -> redirect (+ forwarding)
+//   EX   ALU, branch compare, jump/branch target -> redirect (+ forwarding),
+//        multiply (1 cycle), divide (iterative, the pipeline waits in EX)
 //   MEM  data memory access, load alignment; ECALL/illegal take effect here
 //   WB   register write, instruction retires
 //
@@ -13,6 +14,9 @@
 //             needs it right behind the load stalls in ID for 1 cycle
 //   control   predict not-taken: keep fetching pc+4; a taken branch or jump
 //             is known in EX and flushes the 2 younger instructions in IF/ID
+//   divide    a DIV/REM sits in EX for 34 cycles (div_unit.sv): IF, ID and
+//             EX hold, bubbles go into MEM. The divider captures its operands
+//             on the first cycle, so forwarding only has to be right then.
 //   stop      ECALL/EBREAK/illegal stop the core precisely: when one reaches
 //             MEM everything older has finished (or is finishing in WB), so
 //             we flush everything younger and stop fetching. It then retires
@@ -98,6 +102,7 @@ module core
 
     // hazard / control signals (computed below)
     logic        stall_id;          // load-use: hold PC and IF/ID, bubble into EX
+    logic        stall_ex;          // divide running: hold IF, ID, EX; bubble into MEM
     logic        redirect;          // taken branch or jump in EX
     logic [31:0] redirect_pc;
     logic        stop_mem;          // ECALL / illegal in MEM: flush younger
@@ -112,7 +117,7 @@ module core
         if (rst)                         pc_f <= 32'd0;
         else if (stop_mem || stopping)   pc_f <= pc_f;          // frozen for good
         else if (redirect)               pc_f <= redirect_pc;
-        else if (!stall_id)              pc_f <= pc_f + 32'd4;
+        else if (!stall_id && !stall_ex) pc_f <= pc_f + 32'd4;
     end
 
     always_ff @(posedge clk) begin
@@ -120,7 +125,7 @@ module core
             if_id.valid <= 1'b0;
             if_id.pc    <= 32'd0;
             if_id.instr <= 32'd0;
-        end else if (!stall_id) begin
+        end else if (!stall_id && !stall_ex) begin
             if_id.valid <= 1'b1;
             if_id.pc    <= pc_f;
             if_id.instr <= imem_rdata;
@@ -175,7 +180,11 @@ module core
 
     always_ff @(posedge clk) begin
         // a stall leaves a bubble in EX while ID holds its instruction
-        if (rst || stop_mem || stopping || redirect || stall_id) begin
+        if (rst || stop_mem || stopping || redirect) begin
+            id_ex <= '0;
+        end else if (stall_ex) begin
+            // the divide keeps its place in EX
+        end else if (stall_id) begin
             id_ex <= '0;
         end else begin
             id_ex.valid   <= if_id.valid;
@@ -225,8 +234,36 @@ module core
     alu        u_alu (.a(alu_a), .b(alu_b), .op(id_ex.ctrl.alu_op), .result(alu_result_e));
     branch_cmp u_br  (.a(rs1_val_e), .b(rs2_val_e), .branch(id_ex.ctrl.branch), .taken(branch_taken_e));
 
+    // M extension: funct3 picks the operation, bit 2 set = divide/remainder
+    logic        is_div_e, div_busy, div_done;
+    logic [31:0] mul_result_e, div_result_e;
+    md_op_t      md_op_e;
+
+    assign md_op_e  = md_op_t'(id_ex.instr[14:12]);
+    assign is_div_e = id_ex.valid && id_ex.ctrl.muldiv && id_ex.instr[14];
+    assign stall_ex = is_div_e && !div_done;
+
+    mul_unit u_mul (.a(rs1_val_e), .b(rs2_val_e), .op(md_op_e), .result(mul_result_e));
+    div_unit u_div (
+        .clk    (clk),
+        .rst    (rst),
+        .start  (is_div_e && !div_busy && !div_done),
+        .flush  (stop_mem || stopping),         // an older ECALL/illegal flushes it
+        .op     (md_op_e),
+        .a      (rs1_val_e),
+        .b      (rs2_val_e),
+        .busy   (div_busy),
+        .done   (div_done),
+        .result (div_result_e)
+    );
+
     assign pc_plus4_e = id_ex.pc + 32'd4;
-    assign ex_value_e = (id_ex.ctrl.wb_sel == WB_PC4) ? pc_plus4_e : alu_result_e;
+    always_comb begin
+        if (id_ex.ctrl.wb_sel == WB_PC4)  ex_value_e = pc_plus4_e;
+        else if (!id_ex.ctrl.muldiv)      ex_value_e = alu_result_e;
+        else if (id_ex.instr[14])         ex_value_e = div_result_e;
+        else                              ex_value_e = mul_result_e;
+    end
 
     // Branch / jump resolution. Fetch assumed not-taken, so any taken
     // branch or jump redirects and squashes the 2 instructions behind it.
@@ -234,8 +271,8 @@ module core
     assign redirect_pc = id_ex.ctrl.jalr ? {alu_result_e[31:1], 1'b0} : alu_result_e;
 
     always_ff @(posedge clk) begin
-        if (rst || stop_mem || stopping) begin
-            ex_mem <= '0;
+        if (rst || stop_mem || stopping || stall_ex) begin
+            ex_mem <= '0;                           // (a bubble while dividing)
         end else begin
             ex_mem.valid      <= id_ex.valid;
             ex_mem.pc         <= id_ex.pc;

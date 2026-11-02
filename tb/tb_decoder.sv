@@ -9,7 +9,7 @@
 //     bit concatenation.
 //
 // Stimulus:
-//   1. every RV32I instruction (plus FENCE/ECALL/EBREAK), 300 random encodings
+//   1. every RV32IM instruction (plus FENCE/ECALL/EBREAK), 300 random encodings
 //      each: random bits everywhere the mask allows
 //   2. 20000 fully random 32-bit words (almost all illegal)
 //   3. 20000 random words with a VALID opcode, to hit the funct3/funct7 checks
@@ -30,7 +30,7 @@ module tb_decoder;
     int checks = 0;
 
     // ---------------- the RV32I table: mnemonic, mask, match ----------------
-    localparam int N_INSTR = 40;
+    localparam int N_INSTR = 48;
 
     // Mnemonics in table order. An enum (not strings) because Icarus 12 can't
     // run a case statement on a string returned from a function.
@@ -40,6 +40,7 @@ module tb_decoder;
         ADDI, SLTI, SLTIU, XORI, ORI, ANDI, SLLI, SRLI, SRAI,
         ADD, SUB, SLL, SLT, SLTU, XOR, SRL, SRA, OR, AND,
         FENCE, ECALL, EBREAK,
+        MUL, MULH, MULHSU, MULHU, DIV, DIVU, REM, REMU,
         ILLEGAL
     } mnem_t;
 
@@ -47,6 +48,7 @@ module tb_decoder;
         if (i <= 2)               return 32'h0000_007F;   // LUI AUIPC JAL: opcode only
         if (i <= 23 || i == 37)   return 32'h0000_707F;   // + funct3
         if (i <= 36)              return 32'hFE00_707F;   // + funct7
+        if (i >= 40)              return 32'hFE00_707F;   // M extension: + funct7
         return 32'hFFFF_FFFF;                             // ECALL / EBREAK: exact
     endfunction
 
@@ -66,6 +68,9 @@ module tb_decoder;
            33: return 32'h0000_5033; 34: return 32'h4000_5033; 35: return 32'h0000_6033;
            36: return 32'h0000_7033; 37: return 32'h0000_000F; 38: return 32'h0000_0073;
            39: return 32'h0010_0073;
+           40: return 32'h0200_0033; 41: return 32'h0200_1033; 42: return 32'h0200_2033;
+           43: return 32'h0200_3033; 44: return 32'h0200_4033; 45: return 32'h0200_5033;
+           46: return 32'h0200_6033; 47: return 32'h0200_7033;
            default: return 32'hFFFF_FFFF;
         endcase
     endfunction
@@ -136,6 +141,7 @@ module tb_decoder;
             AND:   begin c.reg_write = 1; c.alu_op = ALU_AND;  end
             FENCE: ;                                  // a NOP: all defaults
             ECALL, EBREAK: c.halt = 1;
+            MUL, MULH, MULHSU, MULHU, DIV, DIVU, REM, REMU: begin c.reg_write = 1; c.muldiv = 1; end
             default: c.illegal = 1;                     // no side effects at all
         endcase
         return c;
@@ -155,8 +161,8 @@ module tb_decoder;
             if (errors <= 20) begin
                 $display("FAIL decode %h (%s)", x, id.name());
                 // (raw field values: Icarus can't call .name() on struct members)
-                $display("     expected {alu,a,b,imm,rw,wb,mr,mw,sz,u,br,jal,jalr,ill,halt} = %h", exp);
-                $display("     got                                                    = %h", ctrl);
+                $display("     expected {alu,a,b,imm,rw,wb,mr,mw,sz,u,br,jal,jalr,ill,halt,md} = %h", exp);
+                $display("     got                                                       = %h", ctrl);
             end
         end
     endtask

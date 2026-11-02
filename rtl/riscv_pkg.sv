@@ -87,9 +87,51 @@ package riscv_pkg;
         branch_t   branch;
         logic      jal;
         logic      jalr;
-        logic      illegal;         // not a valid RV32I instruction
+        logic      illegal;         // not a valid RV32IM instruction
         logic      halt;            // ECALL / EBREAK
+        logic      muldiv;          // M extension: the op is funct3 (see md_op_t)
     } ctrl_t;
+
+    // M extension operations: funct3 of an OP instruction with funct7 = 0000001
+    typedef enum logic [2:0] {
+        MD_MUL    = 3'd0,
+        MD_MULH   = 3'd1,
+        MD_MULHSU = 3'd2,
+        MD_MULHU  = 3'd3,
+        MD_DIV    = 3'd4,
+        MD_DIVU   = 3'd5,
+        MD_REM    = 3'd6,
+        MD_REMU   = 3'd7
+    } md_op_t;
+
+    // Reference model of every M instruction, written straight from the spec
+    // with the language's own * / % operators. The single-cycle core uses it
+    // (it is the model everything is checked against, so it should be
+    // obviously right, not small or fast) and so does tb_muldiv. The real
+    // cores use mul_unit and the iterative div_unit instead.
+    function automatic logic [31:0] md_ref(input md_op_t op, input logic [31:0] a,
+                                           input logic [31:0] b);
+        logic signed [63:0] sa, sb;
+        logic        [63:0] ua, ub, p;
+        sa = {{32{a[31]}}, a};
+        sb = {{32{b[31]}}, b};
+        ua = {32'd0, a};
+        ub = {32'd0, b};
+        case (op)
+            MD_MUL:    begin p = ua * ub; return p[31:0];  end
+            MD_MULH:   begin p = sa * sb; return p[63:32]; end
+            MD_MULHSU: begin p = sa * ub; return p[63:32]; end
+            MD_MULHU:  begin p = ua * ub; return p[63:32]; end
+            MD_DIV:    if (b == 0) return 32'hFFFF_FFFF;
+                       else if (a == 32'h8000_0000 && b == 32'hFFFF_FFFF) return a;
+                       else return 32'($signed(a) / $signed(b));
+            MD_DIVU:   return (b == 0) ? 32'hFFFF_FFFF : a / b;
+            MD_REM:    if (b == 0) return a;
+                       else if (a == 32'h8000_0000 && b == 32'hFFFF_FFFF) return 32'd0;
+                       else return 32'($signed(a) % $signed(b));
+            default:   return (b == 0) ? a : a % b;
+        endcase
+    endfunction
 
     // One retired (completed) instruction and its architectural effects.
     // Both cores produce this, so a testbench can check the pipelined core

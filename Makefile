@@ -16,7 +16,7 @@
 # Add a block: create rtl/<name>.sv and tb/tb_<name>.sv, then add <name> below.
 # A testbench passes by printing "TEST PASSED"; on failure it calls $fatal.
 
-UNIT_TESTS ?= alu regfile decoder branch_cmp
+UNIT_TESTS ?= alu regfile decoder branch_cmp muldiv
 
 # Module to synthesize: a CPU without its RAM (a 64 KB array of flip-flops
 # would swamp the numbers; real chips use SRAM macros). core = 5-stage pipeline.
@@ -97,24 +97,26 @@ prog-%: $(call SIM_BIN,soc_c$(CORE))
 	$(call run-sim,soc_c$(CORE),build/sim/c$(CORE)/prog-$*,+hex=$(CURDIR)/sw/build/$*.hex \
 		+wavefile=$(CURDIR)/build/sim/c$(CORE)/prog-$*/tb_soc.vcd $(PLUSARGS))
 
-# Official RISC-V ISA tests (git submodule), one program per instruction.
+# Official RISC-V ISA tests (git submodule), one program per instruction:
+# rv32ui (base integer) and rv32um (multiply/divide).
 #   fence_i: needs Zifencei (FENCE.I), not implemented
 #   ma_data: needs misaligned loads/stores, which this core reports as errors
 RISCV_TESTS ?= third_party/riscv-tests
-ISA_TESTS ?= $(filter-out fence_i ma_data, \
-	$(basename $(notdir $(wildcard $(RISCV_TESTS)/isa/rv32ui/*.S))))
+ISA_TESTS ?= $(addprefix rv32ui-,$(filter-out fence_i ma_data, \
+	$(basename $(notdir $(wildcard $(RISCV_TESTS)/isa/rv32ui/*.S))))) \
+	$(addprefix rv32um-,$(basename $(notdir $(wildcard $(RISCV_TESTS)/isa/rv32um/*.S))))
 
 isa: $(call SIM_BIN,soc_c$(CORE))
 	@test -d $(RISCV_TESTS)/isa || { echo "missing $(RISCV_TESTS): run git submodule update --init"; exit 1; }
 	@pass=0; failed=""; \
 	for t in $(ISA_TESTS); do \
-		if $(MAKE) --no-print-directory prog-rv32ui-$$t PLUSARGS=+max_cycles=20000 > build/isa-c$(CORE)-$$t.log 2>&1; then \
-			pass=$$((pass+1)); echo "PASS  rv32ui-$$t"; \
+		if $(MAKE) --no-print-directory prog-$$t PLUSARGS=+max_cycles=20000 > build/isa-c$(CORE)-$$t.log 2>&1; then \
+			pass=$$((pass+1)); echo "PASS  $$t"; \
 		else \
-			failed="$$failed $$t"; echo "FAIL  rv32ui-$$t   (log: build/isa-c$(CORE)-$$t.log)"; \
+			failed="$$failed $$t"; echo "FAIL  $$t   (log: build/isa-c$(CORE)-$$t.log)"; \
 		fi; \
 	done; \
-	echo "rv32ui on core $(CORE): $$pass/$(words $(ISA_TESTS)) passed"; \
+	echo "rv32ui + rv32um on core $(CORE): $$pass/$(words $(ISA_TESTS)) passed"; \
 	test -z "$$failed"
 
 lint:

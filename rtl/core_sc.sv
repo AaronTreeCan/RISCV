@@ -1,11 +1,11 @@
-// core_sc.sv - single-cycle RV32I core
+// core_sc.sv - single-cycle RV32IM core
 //
 // The first version of the CPU. The pipelined core (core.sv) replaced it, but
 // it stays as the reference model: tb_soc runs both on the same program and
 // checks that they retire the same instructions with the same results.
 //
 // Every instruction runs start to finish in one clock cycle:
-//   fetch (imem) -> decode -> register read -> ALU / branch compare
+//   fetch (imem) -> decode -> register read -> ALU / branch compare / mul-div
 //   -> data memory -> writeback, and the PC updates on the rising edge.
 //
 // The core only sees two buses, so the memory system (soc.sv) can change
@@ -104,6 +104,11 @@ module core_sc
     alu        u_alu (.a(alu_a), .b(alu_b), .op(ctrl.alu_op), .result(alu_result));
     branch_cmp u_br  (.a(rs1_val), .b(rs2_val), .branch(ctrl.branch), .taken(branch_taken));
 
+    // M extension: computed in one go with riscv_pkg::md_ref (plain * / %).
+    // Fine for the reference model; the real cores use mul_unit + div_unit.
+    logic [31:0] md_result;
+    assign md_result = md_ref(md_op_t'(instr[14:12]), rs1_val, rs2_val);
+
     // ---------------- next PC ----------------
     // JAL and taken branches: the ALU already computed PC + imm.
     // JALR: the ALU computed rs1 + imm; the spec clears bit 0.
@@ -180,7 +185,7 @@ module core_sc
         case (ctrl.wb_sel)
             WB_MEM:  wb_data = load_data;
             WB_PC4:  wb_data = pc_plus4;
-            default: wb_data = alu_result;
+            default: wb_data = ctrl.muldiv ? md_result : alu_result;
         endcase
     end
 

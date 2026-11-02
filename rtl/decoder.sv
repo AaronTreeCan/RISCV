@@ -1,4 +1,4 @@
-// decoder.sv - RV32I instruction decoder (purely combinational)
+// decoder.sv - RV32IM instruction decoder (purely combinational)
 //
 // Two parts, the classic split:
 //   main decoder : opcode -> datapath controls + which kind of ALU work is needed
@@ -12,6 +12,8 @@
 //   - an invalid encoding becomes a NOP with `illegal` set
 //     (no register write, no memory access, no branch/jump)
 //   - ECALL / EBREAK set `halt`; FENCE is a NOP
+//   - M extension (OP with funct7 = 0000001) sets `muldiv`; the core reads
+//     the exact operation from funct3, so alu_op stays at its default
 
 module decoder
     import riscv_pkg::*;
@@ -40,6 +42,7 @@ module decoder
     logic      main_illegal;
     alu_op_t   alu_op;
     logic      alu_illegal;
+    logic      muldiv;
 
     // A harmless "do nothing" instruction: the starting point for every decode,
     // and exactly what an illegal instruction turns into (plus the illegal bit).
@@ -155,8 +158,11 @@ module decoder
     always_comb begin
         alu_op      = ALU_ADD;
         alu_illegal = 1'b0;
+        muldiv      = 1'b0;
 
-        if (alu_kind != ALU_KIND_ADD) begin
+        if (alu_kind == ALU_KIND_REG && funct7 == 7'b0000001) begin
+            muldiv = 1'b1;                      // MUL..REMU: every funct3 is valid
+        end else if (alu_kind != ALU_KIND_ADD) begin
             case (funct3)
                 3'b000: begin
                     // ADD / SUB (R-type, funct7 picks) or ADDI (no SUBI exists)
@@ -209,6 +215,7 @@ module decoder
         end else begin
             ctrl         = main_ctrl;
             ctrl.alu_op  = alu_op;
+            ctrl.muldiv  = muldiv;
         end
     end
 

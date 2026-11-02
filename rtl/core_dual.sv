@@ -1,4 +1,4 @@
-// core_dual.sv - in-order dual-issue RV32I core (5 stages, 2 lanes)
+// core_dual.sv - in-order dual-issue RV32IM core (5 stages, 2 lanes)
 //
 //            IF        ID           EX            MEM          WB
 //   lane 0   pair  ->  any instr -> ALU, branch -> data memory -> regfile port 0
@@ -29,6 +29,9 @@
 // and ID/EX, kills the branch's own lane-1 partner, and restarts fetch at
 // the right PC: 2 lost cycles, as before for every taken branch.
 // BP = 0 turns prediction off (always predict not-taken) for comparison.
+// Multiply/divide: lane 0 only, and always issued alone. MUL* take one cycle
+// in EX. DIV/REM wait in EX for the iterative divider (34 cycles) while
+// IF, ID and EX hold and bubbles go into MEM.
 // Stops: ECALL/EBREAK/illegal take effect in MEM like the scalar pipeline.
 
 module core_dual
@@ -137,7 +140,7 @@ module core_dual
     // Can it run in lane 1?
     function automatic logic alu_only(input ctrl_t c);
         return !c.mem_read && !c.mem_write && (c.branch == BR_NONE) &&
-               !c.jal && !c.jalr && !c.halt && !c.illegal;
+               !c.jal && !c.jalr && !c.halt && !c.illegal && !c.muldiv;
     endfunction
     /* verilator lint_on UNUSEDSIGNAL */
 
@@ -148,6 +151,7 @@ module core_dual
     logic        flush_front;       // kill IF/ID and ID/EX
     logic        hold_d0;           // load-use on the first instruction: freeze front end
     logic        split;             // first issues alone, second moves up
+    logic        stall_ex;          // divide running in EX lane 0: hold IF, ID, EX
 
     assign flush_front = stop_mem || stopping || redirect;
 
@@ -204,14 +208,14 @@ module core_dual
         if (rst)                        pc_f <= 32'd0;
         else if (stop_mem || stopping)  pc_f <= pc_f;
         else if (redirect)              pc_f <= redirect_pc;
-        else if (!hold_d0 && !split)    pc_f <= bp_taken ? bp_target : {pc_f[31:3], 3'b000} + 32'd8;
+        else if (!hold_d0 && !split && !stall_ex) pc_f <= bp_taken ? bp_target : {pc_f[31:3], 3'b000} + 32'd8;
     end
 
     always_ff @(posedge clk) begin
         if (rst || flush_front) begin
             d0 <= '0;
             d1 <= '0;
-        end else if (hold_d0) begin
+        end else if (stall_ex || hold_d0) begin
             // keep both
         end else if (split) begin
             d0 <= d1;
@@ -288,7 +292,7 @@ module core_dual
     // (a predicted-taken word in lane 1 can only be a stale BTB alias of an
     // ALU instruction; send it to lane 0, where mispredicts are checked)
     assign pair_ok = d1.valid && alu_only(c1) && !d1.pred_taken  && !raw01 && !lu1 &&
-                     !c0.halt && !c0.illegal;
+                     !c0.halt && !c0.illegal && !c0.muldiv;
     assign issue0  = d0.valid && !lu0;
     assign issue1  = issue0 && pair_ok;
     assign hold_d0 = d0.valid && lu0;
@@ -298,6 +302,8 @@ module core_dual
         if (rst || flush_front) begin
             e0 <= '0;
             e1 <= '0;
+        end else if (stall_ex) begin
+            // the divide keeps its place in EX (lane 1 is empty beside it)
         end else begin
             if (issue0) begin
                 e0.valid   <= 1'b1;
@@ -381,7 +387,35 @@ module core_dual
     end
     alu        u_alu0 (.a(alu_a0), .b(alu_b0), .op(e0.ctrl.alu_op), .result(alu_y0));
     branch_cmp u_br0  (.a(a1_0), .b(a2_0), .branch(e0.ctrl.branch), .taken(taken0));
-    assign ex_value0 = (e0.ctrl.wb_sel == WB_PC4) ? (e0.pc + 32'd4) : alu_y0;
+    // M extension: funct3 picks the operation, bit 2 set = divide/remainder
+    logic        is_div0, div_busy, div_done;
+    logic [31:0] mul_y0, div_y0;
+    md_op_t      md_op0;
+
+    assign md_op0   = md_op_t'(e0.instr[14:12]);
+    assign is_div0  = e0.valid && e0.ctrl.muldiv && e0.instr[14];
+    assign stall_ex = is_div0 && !div_done;
+
+    mul_unit u_mul (.a(a1_0), .b(a2_0), .op(md_op0), .result(mul_y0));
+    div_unit u_div (
+        .clk    (clk),
+        .rst    (rst),
+        .start  (is_div0 && !div_busy && !div_done),
+        .flush  (stop_mem || stopping),         // an older ECALL/illegal flushes it
+        .op     (md_op0),
+        .a      (a1_0),
+        .b      (a2_0),
+        .busy   (div_busy),
+        .done   (div_done),
+        .result (div_y0)
+    );
+
+    always_comb begin
+        if (e0.ctrl.wb_sel == WB_PC4)  ex_value0 = e0.pc + 32'd4;
+        else if (!e0.ctrl.muldiv)      ex_value0 = alu_y0;
+        else if (e0.instr[14])         ex_value0 = div_y0;
+        else                           ex_value0 = mul_y0;
+    end
 
     // Compare what really happens with what fetch predicted
     assign actual_taken0 = e0.ctrl.jal || e0.ctrl.jalr || taken0;
@@ -408,8 +442,8 @@ module core_dual
     alu u_alu1 (.a(alu_a1), .b(alu_b1), .op(e1.ctrl.alu_op), .result(alu_y1));
 
     always_ff @(posedge clk) begin
-        if (rst || stop_mem || stopping) begin
-            m0 <= '0;
+        if (rst || stop_mem || stopping || stall_ex) begin
+            m0 <= '0;                               // (bubbles while dividing)
             m1 <= '0;
         end else begin
             m0.valid      <= e0.valid;
