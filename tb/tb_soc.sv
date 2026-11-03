@@ -31,6 +31,8 @@
 // Loads from devices (the accelerator, the cycle counter) can't be checked
 // this way: the reference takes the DUT's value (see REF in soc.sv). The
 // accelerator's results are checked by tb_accel and by the program itself.
+// Words the DMA writes into RAM are copied into the reference's RAM as they
+// happen (mirror_* in soc.sv), so later loads of them match.
 
 module tb_soc
     import riscv_pkg::*;
@@ -47,10 +49,20 @@ module tb_soc
     logic [7:0]  putc_char;
     retire_t     dut_ret0, dut_ret1;
 
+    logic        dma_wr_valid;
+    logic [31:0] dma_wr_addr, dma_wr_data;
+
     soc #(.CORE(CORE)) dut (
-        .clk        (clk),
-        .rst        (rst),
-        .ext_rdata  (32'd0),
+        .clk          (clk),
+        .rst          (rst),
+        .ext_rdata    (32'd0),
+        .mirror_clk   (1'b0),
+        .mirror_we    (1'b0),
+        .mirror_addr  (32'd0),
+        .mirror_wdata (32'd0),
+        .dma_wr_valid (dma_wr_valid),
+        .dma_wr_addr  (dma_wr_addr),
+        .dma_wr_data  (dma_wr_data),
         .exit_valid (exit_valid),
         .exit_code  (exit_code),
         .putc_valid (putc_valid),
@@ -76,6 +88,14 @@ module tb_soc
         .clk        (ref_clk),
         .rst        (rst),
         .ext_rdata  (dut_ret0.rd_wdata),
+        // the DUT's DMA writes to RAM, copied into the reference's RAM
+        .mirror_clk   (clk),
+        .mirror_we    (dma_wr_valid),
+        .mirror_addr  (dma_wr_addr),
+        .mirror_wdata (dma_wr_data),
+        .dma_wr_valid (),
+        .dma_wr_addr  (),
+        .dma_wr_data  (),
         .exit_valid (ref_exit_valid),
         .exit_code  (ref_exit_code),
         .putc_valid (ref_putc_valid),

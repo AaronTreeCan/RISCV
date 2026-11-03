@@ -1,8 +1,8 @@
 # RISC-V dual-issue core + INT8 matrix accelerator
 
 An in-order **dual-issue superscalar RV32IM** processor with a branch predictor,
-and a memory-mapped **INT8 systolic-array accelerator** for neural-network
-layers. Written in SystemVerilog, checked instruction by instruction against a
+a memory-mapped **INT8 systolic-array accelerator** for neural-network
+layers, and a **DMA engine** that feeds it. Written in SystemVerilog, checked instruction by instruction against a
 reference model, and run through the official riscv-tests on every push.
 
 ![Block diagram](docs/diagrams/overview.svg)
@@ -16,10 +16,10 @@ reference model, and run through the official riscv-tests on every push.
 | riscv-tests | 48 / 48 (rv32ui + rv32um) on both pipelines, Icarus and Verilator |
 | Dual-issue IPC | 1.10 on `bench.c` (5-stage pipeline: 0.81); **1.22x faster** in wall-clock time after clock speed |
 | Branch predictor | fetch redirects cut from 58% to 17% of branches |
-| Accelerator | 2-layer INT8 neural net **16.5x faster** than software on the dual-issue core, bit-exact |
+| Accelerator | 2-layer INT8 neural net **39.2x faster** than software on the dual-issue core with the DMA (16.4x with the core copying the data), bit-exact |
 | FPGA timing (Lattice ECP5-85F) | 5-stage 44.1 MHz, dual-issue 39.6 MHz (core logic, memories excluded) |
-| Synthesis (Yosys, generic cells) | 5-stage 15.5k cells, dual-issue 31.2k, systolic array 10.6k; no latches |
-| Verification | 6 unit testbenches (~190k checks), lockstep checking on every program, 5 directed assembly suites |
+| Synthesis (Yosys, generic cells) | 5-stage 15.5k cells, dual-issue 31.4k, systolic array 10.6k, DMA 2.0k; no latches |
+| Verification | 7 self-checking unit testbenches, lockstep checking on every program, 5 directed assembly suites |
 
 ### Performance on `bench.c` (CRC-32, insertion sort, recursive Fibonacci, 18,024 instructions)
 
@@ -30,15 +30,17 @@ reference model, and run through the official riscv-tests on every push.
 
 ### Accelerator: `mlp.c`, a 2-layer INT8 network (16 x 64 → 16 → 16)
 
-| Core | Software | Accelerator | Speedup |
+| Core | Software | Accelerator, core copies data | Accelerator, DMA copies data |
 | --- | ---: | ---: | ---: |
-| Single-cycle | 151,774 cycles | 8,075 | 18.7x |
-| 5-stage | 193,762 | 9,617 | 20.1x |
-| Dual-issue | 131,889 | 7,982 | 16.5x |
+| Single-cycle | 151,782 cycles | 8,077 (18.7x) | 3,500 (**43.3x**) |
+| 5-stage | 193,770 | 9,619 (20.1x) | 3,288 (**58.9x**) |
+| Dual-issue | 132,395 | 8,033 (16.4x) | 3,371 (**39.2x**) |
 
-The array itself is busy for only 2,160 of those cycles; the rest is the core
-copying matrices in and out with loads and stores (Amdahl's law). A DMA engine
-is the next step.
+The array itself is busy for 2,160 cycles. With the core copying matrices
+in and out (a load, a store and loop overhead per word), copying took about
+three quarters of the time (Amdahl's law). The DMA moves a word per cycle
+instead, so the remaining time is mostly the array. The speedup is highest on
+the 5-stage core only because its software version is the slowest.
 
 ### Timing: where the clock period goes
 
@@ -99,8 +101,20 @@ is the next fix. Run `make fmax CORE=2 LATE_REDIRECT=0` to measure the old versi
 - INT8 inputs, INT32 accumulation, then round / shift / ReLU / clamp back to
   INT8 for the next layer, the usual quantized-inference scheme.
 - The core drives it with ordinary loads and stores (no new instructions):
-  fill buffers, write the sizes, start, poll STATUS, read results. Driver:
+  write the sizes, start, poll STATUS. Driver:
   [sw/common/accel.h](sw/common/accel.h).
+
+**DMA engine** ([rtl/dma.sv](rtl/dma.sv))
+- 2D copies: rows x bytes per row, with a separate row stride on each side,
+  so a packed matrix in RAM goes into the accelerator's fixed-stride buffers
+  with one descriptor.
+- Shares the data bus with the core by **cycle stealing**: the core always
+  wins, and the DMA moves a word in any cycle the core isn't loading or
+  storing. No core needed a stall input on its data port.
+- Each word is read from one side and written to the other in the same
+  cycle (RAM → accelerator or back), so neither side sees two accesses.
+- Lockstep still works: the reference model has no DMA, so the testbench
+  copies each word the DMA writes into RAM into the reference's RAM as well.
 
 ## Verification
 
@@ -114,7 +128,8 @@ is the next fix. Run `make fmax CORE=2 LATE_REDIRECT=0` to measure the old versi
   random and corner-case stimulus: ALU, register file, decoder (every
   instruction encoding), branch comparator, multiply/divide (all 8 ops,
   timing, flush), accelerator (random shapes vs. a reference matrix multiply,
-  exact cycle counts).
+  exact cycle counts), DMA (random 2D copies with random bus traffic from
+  the core; every byte of both memories checked, exact cycle counts).
 - **Directed assembly suites** for the corner cases random code rarely hits:
   pipeline hazards ([hazards.S](sw/asm/hazards.S)), pairing rules
   ([dual.S](sw/asm/dual.S)), predictor corner cases ([bp.S](sw/asm/bp.S)),
@@ -162,5 +177,5 @@ make waves-alu            # any unit test, plus a waveform for GTKWave
 - [x] Branch prediction (BTB + 2-bit counters)
 - [x] M extension (multiply / divide)
 - [x] INT8 systolic-array accelerator
-- [ ] DMA engine for the accelerator
+- [x] DMA engine for the accelerator
 - [ ] Run on an FPGA board

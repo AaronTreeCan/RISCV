@@ -11,7 +11,7 @@
 #   make isa             run the official rv32ui + rv32um tests (third_party/riscv-tests)
 #   make lint            Verilator lint on every rtl/*.sv file
 #   make synth           Yosys synthesis of SYNTH_TOP; fails if a latch is inferred
-#   make synth SYNTH_TOP=systolic   same for the accelerator's systolic array
+#   make synth SYNTH_TOP=systolic   same for the accelerator's systolic array (or dma, the DMA engine)
 #   make fmax            place and route CORE on a Lattice ECP5 (nextpnr), report the max clock
 #                        (median of 5 placements; LATE_REDIRECT=0 for the old redirect)
 #   make clean           delete build outputs
@@ -19,7 +19,7 @@
 # Add a block: create rtl/<name>.sv and tb/tb_<name>.sv, then add <name> below.
 # A testbench passes by printing "TEST PASSED"; on failure it calls $fatal.
 
-UNIT_TESTS ?= alu regfile decoder branch_cmp muldiv accel
+UNIT_TESTS ?= alu regfile decoder branch_cmp muldiv accel dma
 
 # Module to synthesize: a CPU without its RAM (a 64 KB array of flip-flops
 # would swamp the numbers; real chips use SRAM macros). core = 5-stage pipeline.

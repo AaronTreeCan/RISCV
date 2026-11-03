@@ -47,8 +47,9 @@ jobs:
             make isa CORE=$c SIM=verilator
           done
 
-      - name: Synthesis, both pipelines and the systolic array (fails on inferred latches)
+      - name: Synthesis, both pipelines, the systolic array and the DMA (fails on inferred latches)
         run: |
           make synth SYNTH_TOP=core
           make synth SYNTH_TOP=core_dual
           make synth SYNTH_TOP=systolic
+          make synth SYNTH_TOP=dma

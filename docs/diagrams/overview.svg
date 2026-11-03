@@ -80,7 +80,7 @@
 
   <!-- bus -->
   <rect x="20" y="300" width="920" height="30" rx="4" fill="#f4f4f4" stroke="#888"/>
-  <text x="480" y="320" text-anchor="middle" class="t">SoC bus (rtl/soc.sv): instruction port (64-bit) + data port (32-bit), loads and stores only</text>
+  <text x="480" y="320" text-anchor="middle" class="t">SoC bus (rtl/soc.sv): instruction port (64-bit) + data port (32-bit), shared by the core and the DMA (core first)</text>
   <path d="M95,237 L95,298" class="w"/>
   <path d="M675,237 L675,298" class="w"/>
 
@@ -96,6 +96,13 @@
   <text x="340" y="408" text-anchor="middle" class="s">0x8000_0000 exit, putchar</text>
   <text x="340" y="426" text-anchor="middle" class="s">0x8000_0008 cycle counter</text>
   <path d="M340,332 L340,358" class="w"/>
+
+  <!-- dma -->
+  <rect x="20" y="475" width="420" height="80" rx="6" class="mem"/>
+  <text x="230" y="500" text-anchor="middle" class="t" font-weight="bold">DMA engine (rtl/dma.sv), 0x5000_0000</text>
+  <text x="230" y="520" text-anchor="middle" class="s">2D copies RAM ↔ accelerator, one word per cycle,</text>
+  <text x="230" y="537" text-anchor="middle" class="s">only in cycles the core leaves the data port idle</text>
+  <path d="M230,473 L230,332" class="w"/>
 
   <!-- accelerator -->
   <rect x="470" y="345" width="470" height="215" rx="6" class="acc"/>
